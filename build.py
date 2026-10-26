@@ -4,7 +4,7 @@ import sys
 import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-PKG = "audio_reactive_geometry"
+PKG = "spectroform"
 PKG_DIR = os.path.join(HERE, PKG)
 DIST = os.path.join(HERE, "dist")
 
