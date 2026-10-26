@@ -102,6 +102,7 @@ class AUDIOGEO_Props(PropertyGroup):
         name="Shape",
         description="Base mesh the shape keys deform",
         items=[
+            ("RIPPLE", "Water Ripple", "Travelling waves whose height follows each band"),
             ("SPECTROGRAM", "Spectrogram Terrain", "Time x frequency x magnitude -- the 3D waveform"),
             ("WAVE_TUBE", "Waveform Tube", "Tube along X whose radius follows the waveform"),
             ("WAVE_RING", "Waveform Ring", "The waveform tube bent into a closed ring"),
@@ -112,7 +113,7 @@ class AUDIOGEO_Props(PropertyGroup):
             ("CYLINDER", "Cylinder (Noise)", "Open tube displaced by a noise field"),
             ("TORUS", "Torus (Noise)", "Ring displaced by a noise field"),
         ],
-        default="SPECTROGRAM",
+        default="RIPPLE",
     )
     
     resolution: IntProperty(
@@ -217,6 +218,62 @@ class AUDIOGEO_Props(PropertyGroup):
     sync_sound: BoolProperty(
         name="Sync Sound",
         description="Add the audio file to the sequencer so playback stays in sync",
+        default=True,
+    )
+
+    ripple_source: EnumProperty(
+        name="Wave Source",
+        description="What decides each wave's size and speed",
+        items=[
+            ("SPECTRUM", "Spectrum", "One wave per frequency bin -- follows the track closely"),
+            ("BANDS", "Three Bands", "One wave each for bass, mid and treble -- simpler, calmer"),
+        ],
+        default="SPECTRUM",
+    )
+    ripple_components: IntProperty(
+        name="Wave Components",
+        description="Spectrum bins, each becoming its own travelling wave. "
+                    "More means a closer match to the audio and more shape keys",
+        default=12, min=1, max=32, soft_max=16,
+    )
+    ripple_spread: FloatProperty(
+        name="Pitch Spread",
+        description="Octaves of wavelength between the lowest and highest wave. "
+                    "0 makes every wave the same size",
+        default=3.0, min=0.0, max=6.0,
+    )
+    ripple_beat_gain: FloatProperty(
+        name="Beat Surge",
+        description="How hard each onset drives the waves forward. 0 gives a "
+                    "constant drift that ignores the rhythm",
+        default=2.0, min=0.0, max=20.0, soft_max=8.0,
+    )
+    ripple_pattern: EnumProperty(
+        name="Ripple Pattern",
+        description="Direction the waves travel",
+        items=[
+            ("RADIAL", "Radial", "Rings spreading from the centre, like a dropped stone"),
+            ("LINEAR", "Linear", "Parallel rollers crossing along X"),
+            ("DIAGONAL", "Diagonal", "Parallel rollers crossing corner to corner"),
+        ],
+        default="RADIAL",
+    )
+    ripple_cycles: FloatProperty(
+        name="Wave Count",
+        description="Crests across the surface for the bass wave. "
+                    "Mid and treble use 2.2x and 4.5x this",
+        default=3.0, min=0.25, max=40.0, soft_max=12.0,
+    )
+    ripple_speed: FloatProperty(
+        name="Wave Speed",
+        description="Bass wave cycles per second. Mid and treble travel "
+                    "1.6x and 2.7x faster",
+        default=0.6, min=-8.0, max=8.0, soft_min=-3.0, soft_max=3.0,
+    )
+    scroll_terrain: BoolProperty(
+        name="Scroll With Audio",
+        description="Slide a Spectrogram Terrain past the origin so the "
+                    "playhead stays centred",
         default=True,
     )
 

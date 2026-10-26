@@ -81,6 +81,28 @@ class AUDIOGEO_PT_geometry(_Base, Panel):
         col.prop(props, "base_scale")
         col.prop(props, "shade_smooth")
 
+        if kind == "RIPPLE":
+            col.prop(props, "resolution")
+            col.prop(props, "ripple_pattern")
+            col.prop(props, "ripple_source")
+            if props.ripple_source == "SPECTRUM":
+                col.prop(props, "ripple_components")
+                col.prop(props, "ripple_spread")
+            col.prop(props, "ripple_cycles")
+            col.prop(props, "ripple_speed")
+            col.prop(props, "ripple_beat_gain")
+
+            box = layout.box()
+            box.label(text="Wave Height Per Band", icon="MOD_WAVE")
+            c = box.column(align=True)
+            c.prop(props, "terrain_strength", text="Bass")
+            c.prop(props, "wave_strength", text="Mid")
+            c.prop(props, "spike_strength", text="Treble")
+            return
+
+        if kind == "SPECTROGRAM":
+            col.prop(props, "scroll_terrain")
+
         if kind in SPECTRAL_BARS or kind == "SPECTROGRAM":
             col.prop(props, "spectrum_bins")
             col.prop(props, "spec_height")

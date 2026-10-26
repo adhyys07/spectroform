@@ -6,7 +6,7 @@ import numpy as np
 from bpy.types import Operator
 
 from . import analysis, audio_io, baking, geometry, scene_build, waveform
-from .constants import OBJ_NAME, SPECTRAL_BARS, SPECTRAL_STATIC
+from .constants import OBJ_NAME, RIPPLE_MODES, SPECTRAL_BARS, SPECTRAL_STATIC
 
 
 
@@ -54,6 +54,12 @@ class AUDIOGEO_OT_generate(Operator):
                     bins=props.spectrum_bins,
                     dynamic_range=props.dynamic_range,
                 )
+            elif kind in RIPPLE_MODES and props.ripple_source == "SPECTRUM":
+                spec = analysis.spectrogram(
+                    samples, rate, props.bake_fps,
+                    bins=props.ripple_components,
+                    dynamic_range=props.dynamic_range,
+                )
 
             if kind == "SPECTROGRAM":
                 geo = waveform.build_spectrogram(
@@ -66,6 +72,9 @@ class AUDIOGEO_OT_generate(Operator):
                 geo = waveform.build_waveform_ring(
                     samples, props.size, props.tube_radius,
                     props.tube_segments, props.time_steps)
+            elif kind == "RIPPLE":
+                geo = waveform.build_ripple(
+                    props.resolution, props.size, props.ripple_pattern)
             elif kind in SPECTRAL_BARS:
                 geo = waveform.build_spectrum_bars(
                     props.spectrum_bins, props.size, radial=(kind == "BARS_RADIAL"))
@@ -75,7 +84,19 @@ class AUDIOGEO_OT_generate(Operator):
             obj = scene_build.create_object(context, geo, props.shade_smooth)
 
             wm.progress_update(65)
-            if kind in SPECTRAL_BARS:
+            if kind in RIPPLE_MODES:
+                if props.ripple_source == "SPECTRUM":
+                    pairs = waveform.make_spectral_ripple_offsets(
+                        geo, props, spec.shape[1])
+                    scene_build.add_ripple_shape_keys(obj, pairs)
+                    wm.progress_update(80)
+                    baked = baking.bake_spectral_ripple(obj, spec, data, props, frames)
+                else:
+                    pairs = waveform.make_ripple_offsets(geo, props)
+                    scene_build.add_ripple_shape_keys(obj, pairs)
+                    wm.progress_update(80)
+                    baked = baking.bake_ripple(obj, data, props, frames)
+            elif kind in SPECTRAL_BARS:
                 offsets = waveform.make_bin_offsets(geo, props.spec_height, props.size)
                 scene_build.add_bin_shape_keys(obj, offsets)
                 wm.progress_update(80)
@@ -85,6 +106,8 @@ class AUDIOGEO_OT_generate(Operator):
                 # The mesh already *is* the audio; only the object moves.
                 wm.progress_update(80)
                 baked = baking.bake_object_motion(obj, data, props, frames)
+                if kind == "SPECTROGRAM" and props.scroll_terrain:
+                    baking.bake_scroll(obj, props, frames)
             else:
                 bass_co, mid_co, treble_co = geometry.make_shape_offsets(geo, props)
                 scene_build.add_shape_keys(obj, bass_co, mid_co, treble_co)

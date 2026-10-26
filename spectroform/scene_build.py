@@ -124,3 +124,18 @@ def add_bin_shape_keys(obj, offsets):
         sk.data.foreach_set("co", np.ascontiguousarray(coords, dtype=np.float32).ravel())
 
     obj.active_shape_key_index = 0
+
+def add_ripple_shape_keys(obj, pairs):
+    from .constants import SK_RIPPLE_COS, SK_RIPPLE_SIN
+
+    obj.shape_key_add(name=SK_BASIS, from_mix=False)
+    obj.data.shape_keys.use_relative = True
+
+    for i, (sin_co, cos_co) in enumerate(pairs):
+        for template, coords in ((SK_RIPPLE_SIN, sin_co), (SK_RIPPLE_COS, cos_co)):
+            sk = obj.shape_key_add(name=template % i, from_mix=False)
+            sk.slider_min = -2.0   # cos(wt) goes negative; 0.0 would clip half the wave
+            sk.slider_max = 2.0
+            sk.data.foreach_set("co", np.ascontiguousarray(coords, dtype=np.float32).ravel())
+
+    obj.active_shape_key_index = 0

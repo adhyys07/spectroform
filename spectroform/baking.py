@@ -133,3 +133,82 @@ def bake_spectrum(obj, spec, props, frames):
                               props.release_ms * (1.0 - 0.4 * lean))
         bake_curve(key, 'key_blocks["%s"].value' % (SK_BIN % b), -1, frames, v)
 
+def audio_phase(base_speed, onset, beat_gain, fps):
+    """Phase integrated from the music: steady drift plus a surge per onset.
+
+    Returns radians per frame accumulated, so crests advance when the track
+    does and stall when it is quiet.
+    """
+    rate = (float(base_speed) + onset * float(beat_gain)) / fps
+    return (2.0 * np.pi * np.cumsum(rate)).astype(np.float32)
+
+
+def bake_ripple(obj, data, props, frames):
+    from .constants import SK_RIPPLE_COS, SK_RIPPLE_SIN
+    from .waveform import BAND_SPEED_RATIO
+
+    fps = float(props.bake_fps)
+    key = obj.data.shape_keys
+    t = (np.asarray(frames, dtype=np.float32) - float(frames[0])) / fps
+
+    bands = (
+        ("bass", props.bass_gain),
+        ("mid", props.mid_gain),
+        ("treble", props.treble_gain),
+    )
+
+    onset = analysis.envelope(data["onset"], fps, 8.0, max(40.0, props.release_ms * 0.5))
+
+    baked = {}
+    for i, ((name, gain), speed_ratio) in enumerate(zip(bands, BAND_SPEED_RATIO)):
+        amp = np.clip(data[name] * gain * props.master_gain, 0.0, 2.0)
+        amp = analysis.envelope(amp, fps, props.attack_ms, props.release_ms)
+        baked[name] = amp
+
+        ph = audio_phase(props.ripple_speed * speed_ratio, onset,
+                         props.ripple_beat_gain, fps)
+        bake_curve(key, 'key_blocks["%s"].value' % (SK_RIPPLE_SIN % i), -1, frames,
+                   (amp * np.cos(ph)).astype(np.float32))
+        bake_curve(key, 'key_blocks["%s"].value' % (SK_RIPPLE_COS % i), -1, frames,
+                   (-amp * np.sin(ph)).astype(np.float32))
+
+    baked.update(bake_object_motion(obj, data, props, frames))
+    return baked
+
+def bake_scroll(obj, props, frames):
+    n = len(frames)
+    x0 = props.size * 0.5
+    bake_curve(obj, "location", 0, frames,
+               np.linspace(x0, -x0, n).astype(np.float32))
+
+def bake_spectral_ripple(obj, spec, data, props, frames):
+    """One travelling wave per spectrum bin, phase locked to the audio."""
+    from .constants import SK_RIPPLE_COS, SK_RIPPLE_SIN
+
+    fps = float(props.bake_fps)
+    key = obj.data.shape_keys
+    n_comp = spec.shape[1]
+
+    onset = analysis.envelope(data["onset"], fps, 8.0, max(40.0, props.release_ms * 0.5))
+    ratio = (np.linspace(0.0, 1.0, n_comp, dtype=np.float32)
+             if n_comp > 1 else np.zeros(1, dtype=np.float32))
+    # Higher bins travel faster, matching their shorter wavelength.
+    speeds = props.ripple_speed * (2.0 ** (ratio * props.ripple_spread * 0.5))
+
+    for i in range(n_comp):
+        col = spec[:, i]
+        if props.per_band_level:
+            # Real music has little energy up top, so without this the fine
+            # ripples never show. Each bin then swings its own full range.
+            peak = float(col.max())
+            if peak > 1e-6:
+                col = col / peak
+        amp = np.clip(col * props.master_gain, 0.0, 2.0)
+        amp = analysis.envelope(amp, fps, props.attack_ms, props.release_ms)
+        ph = audio_phase(float(speeds[i]), onset, props.ripple_beat_gain, fps)
+        bake_curve(key, 'key_blocks["%s"].value' % (SK_RIPPLE_SIN % i), -1, frames,
+                   (amp * np.cos(ph)).astype(np.float32))
+        bake_curve(key, 'key_blocks["%s"].value' % (SK_RIPPLE_COS % i), -1, frames,
+                   (-amp * np.sin(ph)).astype(np.float32))
+
+    return bake_object_motion(obj, data, props, frames)
