@@ -1,0 +1,2 @@
+## Spectroform
+Spectroform is a blender extension which generates meshes from a sound wave from audio file. It takes the waves from the audio file and the python modules render them as a sine and cos wave in multiple directions that generates a continuous mesh.
