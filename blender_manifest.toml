@@ -1,0 +1,40 @@
+schema_version = "1.0.0"
+
+# The id must be a valid Python module name and must match the folder name,
+# because Blender imports the extension as bl_ext.<repo>.<id>
+id = "audio_reactive_geometry"
+version = "1.0.0"
+name = "Audio Reactive Geometry"
+tagline = "Audio-reactive 3D geometry with baked keyframe animation"
+maintainer = "Adhdhyan Jain <you@example.com>"
+
+type = "add-on"
+
+# Tags are validated against Blender's fixed add-on list. If `extension build`
+# rejects one, swap it for another from that list rather than inventing one.
+tags = ["Animation", "Import-Export", "Object"]
+
+blender_version_min = "4.2.0"
+
+license = [
+  "SPDX:GPL-3.0-or-later",
+]
+
+copyright = [
+  "2026 Adhdhyan Jain",
+]
+
+# No wheels needed: numpy and aud both ship inside Blender.
+
+[permissions]
+files = "Read audio files and write exported meshes"
+
+[build]
+paths_exclude_pattern = [
+  "__pycache__/",
+  "/tests/",
+  "/.git/",
+  ".DS_Store",
+  "*.zip",
+  "*.pyc",
+]
