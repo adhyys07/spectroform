@@ -1,6 +1,3 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
-"""Sidebar UI — View3D ▸ N ▸ Audio Geo."""
-
 from bpy.types import Panel
 
 from .constants import SPECTRAL_BARS, SPECTRAL_STATIC
@@ -84,6 +81,14 @@ class AUDIOGEO_PT_geometry(_Base, Panel):
         if kind == "RIPPLE":
             col.prop(props, "resolution")
             col.prop(props, "ripple_pattern")
+            if props.ripple_pattern == "SPIRAL":
+                col.prop(props, "ripple_arms")
+            if props.ripple_pattern == "TURBULENT":
+                col.prop(props, "ripple_turbulence")
+            col.prop(props, "ripple_profile")
+            if props.ripple_profile == "GERSTNER":
+                col.prop(props, "ripple_steepness")
+
             col.prop(props, "ripple_source")
             if props.ripple_source == "SPECTRUM":
                 col.prop(props, "ripple_components")

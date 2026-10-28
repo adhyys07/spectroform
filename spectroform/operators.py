@@ -78,6 +78,11 @@ class AUDIOGEO_OT_generate(Operator):
             elif kind in SPECTRAL_BARS:
                 geo = waveform.build_spectrum_bars(
                     props.spectrum_bins, props.size, radial=(kind == "BARS_RADIAL"))
+            elif kind == "RIPPLE":
+                geo = waveform.build_ripple(
+                    props.resolution, props.size, props.ripple_pattern,
+                    arms=props.ripple_arms, warp=props.ripple_turbulence,
+                    seed=props.seed)
             else:
                 geo = geometry.build_geometry(props)
 

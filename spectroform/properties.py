@@ -251,10 +251,15 @@ class AUDIOGEO_Props(PropertyGroup):
     ripple_pattern: EnumProperty(
         name="Ripple Pattern",
         description="Direction the waves travel",
-        items=[
+                items=[
             ("RADIAL", "Radial", "Rings spreading from the centre, like a dropped stone"),
             ("LINEAR", "Linear", "Parallel rollers crossing along X"),
             ("DIAGONAL", "Diagonal", "Parallel rollers crossing corner to corner"),
+            ("SQUARE", "Square Rings", "Concentric squares instead of circles"),
+            ("ANGULAR", "Angular", "Waves orbit the centre rather than leaving it"),
+            ("SPIRAL", "Spiral", "Rotating arms winding out from the centre"),
+            ("TWIN", "Twin Source", "Two stones dropped side by side"),
+            ("TURBULENT", "Turbulent", "Radial rings broken up by noise"),
         ],
         default="RADIAL",
     )
@@ -328,6 +333,33 @@ class AUDIOGEO_Props(PropertyGroup):
         description="Vertices around the tube cross-section",
         default=16, min=3, max=64,
     )
-
+    ripple_profile: EnumProperty(
+        name="Wave Shape",
+        description="Cross-section of each wave",
+        items=[
+            ("SINE", "Sine", "Smooth, symmetric swell"),
+            ("GERSTNER", "Gerstner", "Real water: sharp crests, flat troughs, "
+                                     "points orbit instead of bobbing"),
+            ("STANDING", "Standing", "Oscillates in place like a drumhead "
+                                     "instead of travelling"),
+        ],
+        default="GERSTNER",
+    )
+    ripple_steepness: FloatProperty(
+        name="Steepness",
+        description="Gerstner crest sharpness. Automatically limited to stop "
+                    "the surface folding through itself",
+        default=0.35, min=0.0, max=1.0, soft_max=0.6,
+    )
+    ripple_arms: FloatProperty(
+        name="Spiral Arms",
+        description="Windings in the Spiral pattern. Negative reverses the twist",
+        default=3.0, min=-12.0, max=12.0,
+    )
+    ripple_turbulence: FloatProperty(
+        name="Turbulence",
+        description="How much noise breaks up the Turbulent pattern",
+        default=0.4, min=0.0, max=2.0,
+    )
 
 classes = (AUDIOGEO_Props,)
