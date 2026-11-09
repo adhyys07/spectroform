@@ -29,8 +29,6 @@ def bake_curve(id_data, data_path, index, frames, values):
     if n == 0:
         return
 
-    # Scalar properties (a shape key value, a node socket) reject an index,
-    # while their F-Curve still reports array_index 0.
     if index < 0:
         id_data.keyframe_insert(data_path=data_path, frame=float(frames[0]))
     else:
@@ -134,11 +132,6 @@ def bake_spectrum(obj, spec, props, frames):
         bake_curve(key, 'key_blocks["%s"].value' % (SK_BIN % b), -1, frames, v)
 
 def audio_phase(base_speed, onset, beat_gain, fps):
-    """Phase integrated from the music: steady drift plus a surge per onset.
-
-    Returns radians per frame accumulated, so crests advance when the track
-    does and stall when it is quiet.
-    """
     rate = (float(base_speed) + onset * float(beat_gain)) / fps
     return (2.0 * np.pi * np.cumsum(rate)).astype(np.float32)
 
@@ -182,7 +175,6 @@ def bake_scroll(obj, props, frames):
                np.linspace(x0, -x0, n).astype(np.float32))
 
 def bake_spectral_ripple(obj, spec, data, props, frames):
-    """One travelling wave per spectrum bin, phase locked to the audio."""
     from .constants import SK_RIPPLE_COS, SK_RIPPLE_SIN
 
     fps = float(props.bake_fps)
@@ -192,14 +184,11 @@ def bake_spectral_ripple(obj, spec, data, props, frames):
     onset = analysis.envelope(data["onset"], fps, 8.0, max(40.0, props.release_ms * 0.5))
     ratio = (np.linspace(0.0, 1.0, n_comp, dtype=np.float32)
              if n_comp > 1 else np.zeros(1, dtype=np.float32))
-    # Higher bins travel faster, matching their shorter wavelength.
     speeds = props.ripple_speed * (2.0 ** (ratio * props.ripple_spread * 0.5))
 
     for i in range(n_comp):
         col = spec[:, i]
         if props.per_band_level:
-            # Real music has little energy up top, so without this the fine
-            # ripples never show. Each bin then swings its own full range.
             peak = float(col.max())
             if peak > 1e-6:
                 col = col / peak
@@ -209,6 +198,64 @@ def bake_spectral_ripple(obj, spec, data, props, frames):
         bake_curve(key, 'key_blocks["%s"].value' % (SK_RIPPLE_SIN % i), -1, frames,
                    (amp * np.cos(ph)).astype(np.float32))
         bake_curve(key, 'key_blocks["%s"].value' % (SK_RIPPLE_COS % i), -1, frames,
+                   (-amp * np.sin(ph)).astype(np.float32))
+
+    return bake_object_motion(obj, data, props, frames)
+
+def beat_locked_phase(n_frames, beats, fps, free_speed,cycles_per_beat = 1.0, lock = 1.0):
+    t = np.arange(n_frames, dtype=np.float64)
+    free = 2.0 * np.pi * float(free_speed) * t / float(fps)
+    b = np.asarray(beats, dtype=np.float64)
+    if b.size < 2 or lock <= 0.0:
+        return free.astype(np.float32)
+
+    targets = 2.0 * np.pi * float(cycles_per_beat) * np.arange(b.size)
+    locked = np.interp(t, b, targets)
+
+    slope = (targets[1] - targets[0]) / max(b[1] - b[0], 1e-6)
+    head = t < b[0]
+    locked[head] = targets[0] - (b[0] - t[head] * slope)
+    slope_end = (targets[-1] - targets[-2]) / max(b[-1] - b[-2], 1e-6)
+    tail = t > b[-1]
+    locked[tail] = targets[-1] + (t[tail] - b[-1]) * slope_end
+    w = float(np.clip(lock, 0.0, 1.0))
+    return ((1.0 - w) * free + w * locked).astype(np.float32)
+
+def make_loopable(values, fade_frames, wrap=False):
+    v = np.asarray(values, dtype=np.float64).copy()
+    n = v.size
+    f = int(min(fade_frames, n // 2))
+    if f < 2:
+        return v.astype(np.float32)
+    w = np.linspace(0.0, 1.0, f)
+    head = v[:f]
+    if wrap:
+        head = head + np.round((v[-f:] - head) / (2.0 * np.pi)) * 2.0 * np.pi
+    v[-f:] = v[-f:] * (1.0 - w) + head * w
+    return v.astype(np.float32)
+
+def bake_emitters(obj, data, props, frames, beats):
+    from .constants import SK_RIPPLE_COS, SK_RIPPLE_SIN
+
+    key = obj.data.shape_keys
+    fps = float(props.bake_fps)
+    n = len(frames)
+    slots = max(1, int(props.emitter_slots))
+    t = np.arange(n, dtype=np.float64) / fps
+    decay = max(float(props.emitter_decay), 0.05)
+
+    for s in range(slots):
+        amp = np.zeros(n)
+        ph = np.zeros(n)
+        for j, b in enumerate(np.asarray(beats, dtype=int) - int(frames[0])):
+            if j % slots != s or b < 0 or b >= n:
+                continue
+            age = t[b:] - t[b]
+            amp[b:] = np.exp(-age / decay)
+            ph[b:] = 2.0 * np.pi * props.ripple_speed * age
+        bake_curve(key, 'key_blocks["%s"].value' % (SK_RIPPLE_SIN % s), -1, frames,
+                   (amp * np.cos(ph)).astype(np.float32))
+        bake_curve(key, 'key_blocks["%s"].value' % (SK_RIPPLE_COS % s), -1, frames,
                    (-amp * np.sin(ph)).astype(np.float32))
 
     return bake_object_motion(obj, data, props, frames)

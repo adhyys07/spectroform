@@ -263,8 +263,8 @@ def make_spectral_ripple_offsets(geo, props, n_components):
         ))
     return out
 
-def _phase_field(verts, size, pattern, arms, wrap, seed):
-    x, y = verts[:, 0], verts[: 1]
+def _phase_field(verts, size, pattern, arms, warp, seed):
+    x, y = verts[:, 0], verts[:, 1]
     half = max(size * 0.5, 1e-6)
     r = np.sqrt(x*x+y*y)
     theta = np.arctan2(y, x)
@@ -276,6 +276,8 @@ def _phase_field(verts, size, pattern, arms, wrap, seed):
     elif pattern == "SQUARE":
         p = np.maximum(np.abs(x), np.abs(y)) / half
     elif pattern == "ANGULAR":
+        p = theta / (2.0 * np.pi) + 0.5
+    elif pattern == "SPIRAL":
         p = r / half + float(arms) * theta / (2.0 * np.pi)
     elif pattern == "TWIN":
         off = half * 0.5                                  
@@ -364,3 +366,10 @@ def make_spectral_ripple_offsets(geo, props, n_components):
         k = 2.0 * np.pi * max(float(cycles[i]), 0.01)
         out.append(wave_pair(geo, props, k, unit * float(weight[i])))
     return out
+
+def make_emitter_offsets(geo, props):
+    unit = max(props.size, 1e-4)
+    slots = max(1, int(props.emitter_slots))
+    k = 2.0 * np.pi * max(props.ripple_cycles, 0.01)
+    amp = float(props.terrain_strength) * unit / np.sqrt(float(slots))
+    return [wave_pair(geo, props, k, amp) for _ in range(slots)]

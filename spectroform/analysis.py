@@ -145,3 +145,51 @@ def spectrogram(samples, rate, fps, bins=64, fmin=30.0, fmax=16000.0, dynamic_ra
         return np.zeros_like(spec)
     out = (db - (top - dynamic_range)) / max(dynamic_range, 1e-3)
     return np.clip(out, 0.0, 1.0).astype(np.float32)
+
+def detect_tempo(onset, fps, bpm_min=60.0, bpm_max=200.0,
+                 bpm_pref=120.0, octave_width=0.9):
+    x = np.asarray(onset, dtype=np.float64)
+    x -= x.mean()
+    if x.size < 8 or not np.any(x):
+        return 0.0,0
+    ac = np.correlate(x, x, mode="full")[x.size - 1:]
+    lo = max(1, int(round(60.0 * fps / bpm_max)))
+    hi = min(x.size - 1, int(round(60.0 * fps / bpm_min)))
+    if hi <= lo:
+        return 0.0, 0
+
+    lags = np.arange(lo, hi + 1, dtype=np.float64)
+    cand = ac[lo:hi + 1]
+    bpms = 60.0 * fps / lags
+    prior = np.exp(-0.5 * (np.log2(bpms / bpm_pref) / octave_width) ** 2)
+    lag = int(lags[int(np.argmax(cand * prior))])
+    return 60.0 * fps / lag, lag
+
+
+def beat_frames(onset, fps, bpm, start_frame=0):
+    if bpm <= 0:
+        return np.zeros(0, dtype=np.int32)
+    period = 60.0 * fps / bpm
+    n = onset.size
+    best_off, best_score = 0.0, -1.0
+    for off in np.arange(0.0, period, 0.25):
+        idx = np.round(np.arange(off, n, period)).astype(int)
+        idx = idx[idx < n]
+        if idx.size == 0:
+            continue
+        score = float(onset[idx].sum())
+        if score > best_score:
+            best_score, best_off = score, off
+    idx = np.round(np.arange(best_off, n, period)).astype(int)
+    return (idx[idx < n] + int(start_frame)).astype(np.int32)
+
+def bin_frequencies(bins, fmin = 30.0, fmax = 16000.0):
+    edges = np.geomspace(max(fmin, 1.0), fmax, bins + 1)
+    return np.sqrt(edges[:-1] * edges[1:]).astype(np.float32)
+
+def spectral_centroid(spec, bin_hz):
+    lg = np.log2(np.maximum(np.asarray(bin_hz, dtype=np.float64), 1.0))
+    w = spec.sum(axis=1)
+    c = (spec * lg[None, :]).sum(axis=1) / np.maximum(w, 1e-9)
+    lo, hi = float(lg[0]), float(lg[-1])
+    return np.clip((c - lo) / max(hi - lo, 1e-6), 0.0, 1.0).astype(np.float32)

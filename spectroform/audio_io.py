@@ -45,3 +45,18 @@ def load_audio(filepath):
         data = data / peak  # so the gain sliders behave the same for any file
  
     return data, rate
+
+def load_audio_channels(filepath):
+    path = bpy.path.abspath(filepath)
+    data, rate = _decode(path)
+    if data.ndim > 1 and data.shape[1] >= 2:
+        left, right = data[:, 0].copy(), data[:, 1].copy()
+    else:
+        flat = data.ravel()
+        left = right = flat
+    mono = data.mean(axis=1) if data.ndim > 1 else data
+
+    peak = max(float(np.max(np.abs(mono))), 1e-9)
+    return (mono / peak).astype(np.float32), \
+           (left / peak).astype(np.float32), \
+           (right / peak).astype(np.float32), rate

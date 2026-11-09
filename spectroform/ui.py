@@ -161,6 +161,14 @@ class AUDIOGEO_PT_motion(_Base, Panel):
         col.prop(props, "pulse_gain")
         col.prop(props, "spin_speed")
         col.prop(props, "spin_gain")
+        col.prop(props, "beat_lock")
+        col.prop(props, "cycles_per_beat")
+        col.prop(props, "loop_fade")
+        col.prop(props, "colour_by_timbre")
+        col.prop(props, "add_camera")
+        if props.add_camera:
+            col.prop(props, "camera_orbit")
+
 
         layout.separator()
         col = layout.column(align=True)
@@ -184,6 +192,17 @@ class AUDIOGEO_PT_export(_Base, Panel):
         col.prop(props, "export_selected_only")
         layout.operator("audiogeo.export", icon="EXPORT")
 
+class AUDIOGEO_PT_presets(_Base, Panel):
+    bl_label = "Presets"
+    bl_parent_id = "AUDIOGEO_PT_main"
+
+    def draw(self, context):
+        from .presets import PRESETS
+        col = self.layout.column(align=True)
+        for key in PRESETS:
+            col.operator("audiogeo.preset",
+                         text=key.replace("_", " ").title()).preset = key
+
 
 classes = (
     AUDIOGEO_PT_main,
@@ -191,4 +210,5 @@ classes = (
     AUDIOGEO_PT_geometry,
     AUDIOGEO_PT_motion,
     AUDIOGEO_PT_export,
+    AUDIOGEO_PT_presets
 )

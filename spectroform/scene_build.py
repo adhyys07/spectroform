@@ -5,6 +5,9 @@ import numpy as np
 from . import baking
 from .constants import MAT_NAME, OBJ_NAME, SK_BASIS, SK_BASS, SK_MID, SK_TREBLE, STRIP_NAME
 
+CAM_NAME = "Spectroform_Camera"
+RIG_NAME = "Spectroform_Rig"
+
 def remove_previous(context):
     obj = bpy.data.objects.get(OBJ_NAME)
     if obj is None:
@@ -139,3 +142,52 @@ def add_ripple_shape_keys(obj, pairs):
             sk.data.foreach_set("co", np.ascontiguousarray(coords, dtype=np.float32).ravel())
 
     obj.active_shape_key_index = 0
+
+def add_camera_rig(context, obj, frames, props):
+    from . import baking
+
+    rig = bpy.data.objects.get(RIG_NAME)
+    if rig is None:
+        rig = bpy.data.objects.new(RIG_NAME, None)
+        context.collection.objects.link(rig)
+    rig.rotation_mode = "XYZ"
+
+    cam = bpy.data.objects.get(CAM_NAME)
+    if cam is None:
+        cam = bpy.data.objects.new(CAM_NAME, bpy.data.cameras.new(CAM_NAME))
+        context.collection.objects.link(cam)
+    cam.parent = rig
+
+    dist = props.size * 1.8
+    cam.location = (0.0, -dist, props.size * 0.75)
+    cam.rotation_euler = (math.radians(66.0), 0.0, 0.0)
+
+    n = len(frames)
+    turns = float(props.camera_orbit)
+    baking.bake_curve(rig, "rotation_euler", 2, frames,
+                      np.linspace(0.0, 2.0 * np.pi * turns, n).astype(np.float32))
+    context.scene.camera = cam
+    return cam
+
+def bake_emission_hue(mat, frames, centroid):
+    import colorsys
+    from . import baking
+
+    nodes = mat.node_tree.nodes
+    bsdf = next((n for n in nodes if n.type == "BSDF_PRINCIPLED"), None)
+    if bsdf is None:
+        return
+    sock = bsdf.inputs.get("Emission Color") or bsdf.inputs.get("Emission")
+    if sock is None:
+        return
+    idx = next((i for i, s in enumerate(bsdf.inputs) if s == sock), None)
+    if idx is None:
+        return
+        path = 'nodes["%s"].inputs[%d].default_value' % (bsdf.name, idx)
+    rgb = np.array([colorsys.hsv_to_rgb(0.66 * (1.0 - float(c)), 0.85, 1.0)
+                    for c in centroid], dtype=np.float32)
+    for c in range(3):
+        try:
+            baking.bake_curve(mat.node_tree, path, c, frames, rgb[:, c])
+        except Exception:
+            return

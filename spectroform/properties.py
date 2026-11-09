@@ -362,4 +362,54 @@ class AUDIOGEO_Props(PropertyGroup):
         default=0.4, min=0.0, max=2.0,
     )
 
+        beat_lock: FloatProperty(
+        name="Beat Lock",
+        description="Blend between free drift (0) and a crest landing exactly "
+                    "on every detected beat (1)",
+        default=0.7, min=0.0, max=1.0,
+    )
+    cycles_per_beat: FloatProperty(
+        name="Cycles Per Beat",
+        description="Wave cycles elapsing between consecutive beats",
+        default=1.0, min=0.125, max=8.0,
+    )
+    loop_fade: IntProperty(
+        name="Loop Fade",
+        description="Frames crossfaded at the end so the bake tiles seamlessly. "
+                    "0 disables",
+        default=0, min=0, max=240,
+    )
+    emitter_slots: IntProperty(
+        name="Emitter Slots",
+        description="Overlapping ripple bursts. Each beat lights the next slot",
+        default=4, min=1, max=12,
+    )
+    emitter_decay: FloatProperty(
+        name="Emitter Decay",
+        description="Seconds for a burst to fade after its beat",
+        default=0.8, min=0.05, max=8.0,
+    )
+    use_stereo: BoolProperty(
+        name="Stereo Split",
+        description="Drive the two halves of the mesh from the L and R channels",
+        default=False,
+    )
+    colour_by_timbre: BoolProperty(
+        name="Colour By Timbre",
+        description="Emission hue follows the spectral centroid: blue when dark, "
+                    "red when bright",
+        default=True,
+    )
+    add_camera: BoolProperty(
+        name="Add Camera Rig",
+        description="Create an orbiting camera framed on the result",
+        default=False,
+    )
+    camera_orbit: FloatProperty(
+        name="Camera Orbit",
+        description="Full turns the camera makes over the whole track",
+        default=0.25, min=-4.0, max=4.0,
+    )
+
+
 classes = (AUDIOGEO_Props,)
