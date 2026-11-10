@@ -227,6 +227,7 @@ class AUDIOGEO_Props(PropertyGroup):
         items=[
             ("SPECTRUM", "Spectrum", "One wave per frequency bin -- follows the track closely"),
             ("BANDS", "Three Bands", "One wave each for bass, mid and treble -- simpler, calmer"),
+            ("EMITTER", "Beat Emitters", "Each detected beat launches its own ripple burst"),
         ],
         default="SPECTRUM",
     )
@@ -361,8 +362,7 @@ class AUDIOGEO_Props(PropertyGroup):
         description="How much noise breaks up the Turbulent pattern",
         default=0.4, min=0.0, max=2.0,
     )
-
-        beat_lock: FloatProperty(
+    beat_lock: FloatProperty(
         name="Beat Lock",
         description="Blend between free drift (0) and a crest landing exactly "
                     "on every detected beat (1)",

@@ -22,6 +22,7 @@ class AUDIOGEO_PT_main(_Base, Panel):
         row = col.row(align=True)
         row.prop(props, "bake_fps")
         row.prop(props, "frame_start")
+        col.prop(props, "use_stereo")
 
         layout.separator()
         layout.operator("audiogeo.generate", icon="PLAY")
@@ -93,6 +94,9 @@ class AUDIOGEO_PT_geometry(_Base, Panel):
             if props.ripple_source == "SPECTRUM":
                 col.prop(props, "ripple_components")
                 col.prop(props, "ripple_spread")
+            elif props.ripple_source == "EMITTER":
+                col.prop(props, "emitter_slots")
+                col.prop(props, "emitter_decay")
             col.prop(props, "ripple_cycles")
             col.prop(props, "ripple_speed")
             col.prop(props, "ripple_beat_gain")

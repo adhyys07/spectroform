@@ -6,7 +6,8 @@ import numpy as np
 from bpy.types import Operator
 
 from . import analysis, audio_io, baking, geometry, scene_build, waveform
-from .constants import OBJ_NAME, RIPPLE_MODES, SPECTRAL_BARS, SPECTRAL_STATIC
+from .constants import (MAT_NAME, OBJ_NAME, RIPPLE_MODES,
+                        SPECTRAL_BARS, SPECTRAL_STATIC)
 
 
 
@@ -29,7 +30,12 @@ class AUDIOGEO_OT_generate(Operator):
         wm.progress_begin(0, 100)
         try:
             wm.progress_update(5)
-            samples, rate = audio_io.load_audio(props.audio_path)
+            if props.use_stereo:
+                samples, left, right, rate = audio_io.load_audio_channels(
+                    props.audio_path)
+            else:
+                samples, rate = audio_io.load_audio(props.audio_path)
+                left = right = samples
 
             wm.progress_update(20)
             data = analysis.analyse_audio(
@@ -37,6 +43,12 @@ class AUDIOGEO_OT_generate(Operator):
                 props.bass_max, props.mid_max, props.dynamic_range,
                 per_band=props.per_band_level,
             )
+            bpm, _lag = analysis.detect_tempo(data["onset"], props.bake_fps)
+            data["bpm"] = bpm
+            data["beats"] = analysis.beat_frames(
+                data["onset"], props.bake_fps, bpm,
+                start_frame=props.frame_start)
+
             n_frames = data["n_frames"]
             if n_frames > 30000:
                 self.report({"WARNING"}, "Very long clip (%d frames) - bake may be slow." % n_frames)
@@ -47,6 +59,7 @@ class AUDIOGEO_OT_generate(Operator):
 
             kind = props.geometry_type
             frames = np.arange(n_frames, dtype=np.float32) + float(props.frame_start)
+            spec = None
 
             if kind in SPECTRAL_STATIC or kind in SPECTRAL_BARS:
                 spec = analysis.spectrogram(
@@ -54,12 +67,24 @@ class AUDIOGEO_OT_generate(Operator):
                     bins=props.spectrum_bins,
                     dynamic_range=props.dynamic_range,
                 )
-            elif kind in RIPPLE_MODES and props.ripple_source == "SPECTRUM":
-                spec = analysis.spectrogram(
-                    samples, rate, props.bake_fps,
-                    bins=props.ripple_components,
-                    dynamic_range=props.dynamic_range,
-                )
+            elif kind in RIPPLE_MODES and props.ripple_source in {"SPECTRUM", "EMITTER"}:
+                if props.use_stereo and props.ripple_source == "SPECTRUM":
+                    spec_l = analysis.spectrogram(
+                        left, rate, props.bake_fps,
+                        bins=props.ripple_components,
+                        dynamic_range=props.dynamic_range)
+                    spec_r = analysis.spectrogram(
+                        right, rate, props.bake_fps,
+                        bins=props.ripple_components,
+                        dynamic_range=props.dynamic_range)
+                    spec = spec_l.copy()
+                    spec[:, 1::2] = spec_r[:, 1::2]
+                else:
+                    spec = analysis.spectrogram(
+                        samples, rate, props.bake_fps,
+                        bins=props.ripple_components,
+                        dynamic_range=props.dynamic_range,
+                    )
 
             if kind == "SPECTROGRAM":
                 geo = waveform.build_spectrogram(
@@ -90,9 +115,15 @@ class AUDIOGEO_OT_generate(Operator):
 
             wm.progress_update(65)
             if kind in RIPPLE_MODES:
-                if props.ripple_source == "SPECTRUM":
+                if props.ripple_source == "EMITTER":
+                    pairs = waveform.make_emitter_offsets(geo, props)
+                    scene_build.add_ripple_shape_keys(obj, pairs)
+                    wm.progress_update(80)
+                    baked = baking.bake_emitters(
+                        obj, data, props, frames, data["beats"])
+                elif props.ripple_source == "SPECTRUM":
                     pairs = waveform.make_spectral_ripple_offsets(
-                        geo, props, spec.shape[1])
+                        geo, props, spec.shape[1], stereo=props.use_stereo)
                     scene_build.add_ripple_shape_keys(obj, pairs)
                     wm.progress_update(80)
                     baked = baking.bake_spectral_ripple(obj, spec, data, props, frames)
@@ -135,6 +166,16 @@ class AUDIOGEO_OT_generate(Operator):
                     )
                 scene_build.setup_material(obj, frames, energy)
 
+                if props.colour_by_timbre and spec is not None:
+                    hz = analysis.bin_frequencies(spec.shape[1])
+                    centroid = analysis.spectral_centroid(spec, hz)
+                    mat = bpy.data.materials.get(MAT_NAME)
+                    if mat is not None:
+                        scene_build.bake_emission_hue(mat, frames, centroid)
+
+            if props.add_camera:
+                scene_build.add_camera_rig(context, obj, frames, props)
+
             if props.sync_sound:
                 try:
                     scene_build.add_sound_strip(scene, props.audio_path, props.frame_start)
@@ -154,6 +195,8 @@ class AUDIOGEO_OT_generate(Operator):
         msg = "%d verts, %d frames @ %d fps (%.1fs audio) in %.1fs" % (
             len(obj.data.vertices), n_frames, props.bake_fps, data["duration"], time.time() - t0,
         )
+        if data.get("bpm", 0.0) > 0.0:
+            msg += " | %.0f BPM, %d beats" % (data["bpm"], len(data["beats"]))
         props.last_report = msg
         self.report({"INFO"}, msg)
         return {"FINISHED"}

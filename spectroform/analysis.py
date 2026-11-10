@@ -1,4 +1,10 @@
 import math
+from numpy.lib.stride_tricks import sliding_window_view
+
+A4_HZ = 440.0
+A4_MIDI = 69
+NOTE_NAMES = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
+
 
 import numpy as np
 

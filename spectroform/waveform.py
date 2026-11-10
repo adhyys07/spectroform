@@ -183,44 +183,6 @@ def make_bin_offsets(geo, height, size):
 BAND_CYCLE_RATIO = (1.0, 2.2, 4.5)   
 BAND_SPEED_RATIO = (1.0, 1.6, 2.7)
 
-def build_ripple(res, size, pattern):
-    from .geometry import build_grid
-
-    geo = build_grid(res, size)
-    v = geo["verts"]
-    half = max(size * 0.5, 1e-6)
-
-    if pattern == "LINEAR":
-        phase = v[:, 0] / (2.0 * half) + 0.5
-    elif pattern == "DIAGONAL":
-        phase = (v[:, 0] + v[:, 1]) / (4.0 * half) + 0.5
-    else:
-        phase = np.sqrt(v[:, 0] ** 2 + v[:, 1] ** 2) / half
-
-    geo["phase"] = phase.astype(np.float32)
-    return geo
-
-def make_ripple_offsets(geo, props):
-    verts = geo["verts"]
-    normals = geo["normals"]
-    falloff = geo["falloff"][:, None]
-    phase = geo["phase"]
-    unit = max(props.size, 1e-4)
-
-    amps = (props.terrain_strength, props.wave_strength, props.spike_strength)
-
-    out = []
-    for ratio, amp in zip(BAND_CYCLE_RATIO, amps):
-        k = 2.0 * np.pi * max(props.ripple_cycles * ratio, 0.01)
-        d = float(amp) * unit
-        s = np.sin(phase * k).astype(np.float32)[:, None]
-        c = np.cos(phase * k).astype(np.float32)[:, None]
-        out.append((
-            verts + normals * (s * d) * falloff,
-            verts + normals * (c * d) * falloff,
-        ))
-    return out
-
 def ripple_component_cycles(n_components, base_cycles, spread_octaves):
     """Spatial frequency per component: low bins long swells, high bins fine chop."""
     if n_components <= 1:
@@ -228,40 +190,6 @@ def ripple_component_cycles(n_components, base_cycles, spread_octaves):
     ratio = np.linspace(0.0, 1.0, n_components, dtype=np.float32)
     return (base_cycles * (2.0 ** (ratio * spread_octaves))).astype(np.float32)
 
-
-def make_spectral_ripple_offsets(geo, props, n_components):
-    """One (sin, cos) pair per spectrum bin, wavelength set by that bin's pitch."""
-    verts = geo["verts"]
-    normals = geo["normals"]
-    falloff = geo["falloff"][:, None]
-    phase = geo["phase"]
-    unit = max(props.size, 1e-4)
-
-    cycles = ripple_component_cycles(
-        n_components, props.ripple_cycles, props.ripple_spread)
-
-    # The three height sliders set the tilt across the spectrum: long swells
-    # take the Bass value, the finest chop takes Treble, the rest interpolate.
-    ratio = (np.linspace(0.0, 1.0, n_components, dtype=np.float32)
-             if n_components > 1 else np.zeros(1, dtype=np.float32))
-    tilt = np.interp(ratio, (0.0, 0.5, 1.0),
-                     (props.terrain_strength, props.wave_strength,
-                      props.spike_strength)).astype(np.float32)
-    # Components add incoherently, so divide by sqrt(count) to keep the
-    # overall height steady as Wave Components changes.
-    weight = tilt / np.sqrt(float(n_components))
-
-    out = []
-    for i in range(n_components):
-        k = 2.0 * np.pi * max(float(cycles[i]), 0.01)
-        d = unit * float(weight[i])
-        s = np.sin(phase * k).astype(np.float32)[:, None]
-        c = np.cos(phase * k).astype(np.float32)[:, None]
-        out.append((
-            verts + normals * (s * d) * falloff,
-            verts + normals * (c * d) * falloff,
-        ))
-    return out
 
 def _phase_field(verts, size, pattern, arms, warp, seed):
     x, y = verts[:, 0], verts[:, 1]
@@ -334,7 +262,8 @@ def wave_pair(geo, props, k, amp):
         return verts, verts - n * (skp * amp) * f
 
     if profile == "GERSTNER":
-        q = min(float(props.ripple_steepness), 2.0 / max(amp * k, 1e-6))
+        peak = float(np.max(np.abs(amp)))
+        q = min(float(props.ripple_steepness), 2.0 / max(peak * k, 1e-6))
         return (verts + (n * skp - d * (q * ckp)) * amp * f,
                 verts + (n * ckp + d * (q * skp)) * amp * f)
     
@@ -349,7 +278,19 @@ def make_ripple_offsets(geo, props):
         out.append(wave_pair(geo, props, k, float(amp) * unit))
     return out
 
-def make_spectral_ripple_offsets(geo, props, n_components):
+def stereo_masks(geo, size, sharpness=1.6):
+    """(left, right) per-vertex weights, crossfading across X.
+
+    They sum to 1 everywhere, so a mono source masked by both is unchanged.
+    """
+    x = geo["verts"][:, 0]
+    half = max(size * 0.5, 1e-6)
+    t = np.clip(0.5 - (x / (2.0 * half)) * sharpness, 0.0, 1.0)
+    left = (t * t * (3.0 - 2.0 * t)).astype(np.float32)   # smoothstep
+    return left[:, None], (1.0 - left)[:, None]
+
+
+def make_spectral_ripple_offsets(geo, props, n_components, stereo=False):
     unit = max(props.size, 1e-4)
     cycles = ripple_component_cycles(
         n_components, props.ripple_cycles, props.ripple_spread)
@@ -361,10 +302,18 @@ def make_spectral_ripple_offsets(geo, props, n_components):
                       props.spike_strength)).astype(np.float32)
     weight = tilt / np.sqrt(float(n_components))
 
+    if stereo:
+        mask_l, mask_r = stereo_masks(geo, props.size)
+
     out = []
     for i in range(n_components):
         k = 2.0 * np.pi * max(float(cycles[i]), 0.01)
-        out.append(wave_pair(geo, props, k, unit * float(weight[i])))
+        amp = unit * float(weight[i])
+        if stereo:
+            # Alternate sides; the baker feeds matching channels in the same
+            # order, so the left half really is driven by the left channel.
+            amp = amp * (mask_l if i % 2 == 0 else mask_r)
+        out.append(wave_pair(geo, props, k, amp))
     return out
 
 def make_emitter_offsets(geo, props):

@@ -21,7 +21,9 @@ if "bpy" in locals():
         geometry,      
         baking,        
         scene_build,   
+        waveform,
         properties,    
+        presets,
         operators,     
         ui,            
     ):
@@ -34,9 +36,11 @@ else:
         constants,
         geometry,
         operators,
+        presets,
         properties,
         scene_build,
         ui,
+        waveform,
     )
 
 import bpy
@@ -44,7 +48,8 @@ from bpy.props import PointerProperty
 
 from .constants import MIN_BLENDER
 
-CLASSES = properties.classes + operators.classes + ui.classes
+CLASSES = (properties.classes + operators.classes
+           + presets.classes + ui.classes)
 
 
 def register():

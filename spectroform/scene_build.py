@@ -1,3 +1,5 @@
+import math
+
 import bmesh
 import bpy
 import numpy as np
@@ -183,11 +185,9 @@ def bake_emission_hue(mat, frames, centroid):
     idx = next((i for i, s in enumerate(bsdf.inputs) if s == sock), None)
     if idx is None:
         return
-        path = 'nodes["%s"].inputs[%d].default_value' % (bsdf.name, idx)
+
+    path = 'nodes["%s"].inputs[%d].default_value' % (bsdf.name, idx)
     rgb = np.array([colorsys.hsv_to_rgb(0.66 * (1.0 - float(c)), 0.85, 1.0)
                     for c in centroid], dtype=np.float32)
     for c in range(3):
-        try:
-            baking.bake_curve(mat.node_tree, path, c, frames, rgb[:, c])
-        except Exception:
-            return
+        baking.bake_curve(mat.node_tree, path, c, frames, rgb[:, c])

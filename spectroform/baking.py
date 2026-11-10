@@ -40,6 +40,15 @@ def bake_curve(id_data, data_path, index, frames, values):
         raise RuntimeError("Could not create an F-Curve for %s[%d]" % (data_path, index))
  
     kp = fc.keyframe_points
+    # Re-baking a shorter clip onto an ID that kept its action (the material
+    # survives between bakes) leaves stale keys behind, and foreach_set then
+    # fails with an array-length mismatch. Size the list exactly.
+    if len(kp) > n:
+        try:
+            kp.clear()
+        except AttributeError:
+            for point in list(kp)[n:]:
+                kp.remove(point, fast=True)
     if n > len(kp):
         kp.add(count=n - len(kp))
  
@@ -136,6 +145,30 @@ def audio_phase(base_speed, onset, beat_gain, fps):
     return (2.0 * np.pi * np.cumsum(rate)).astype(np.float32)
 
 
+def ripple_phase(data, props, frames, base_speed, onset, fps):
+    """Phase for one wave: locked to detected beats, or free-running.
+
+    Beat Lock blends between the two, so 0 keeps the onset-surge behaviour
+    and 1 puts a crest exactly on every beat.
+    """
+    beats = np.asarray(data.get("beats", ()), dtype=np.float64)
+    if float(props.beat_lock) > 0.0 and beats.size >= 2:
+        return beat_locked_phase(len(frames), beats - float(frames[0]), fps,
+                                 base_speed,
+                                 cycles_per_beat=props.cycles_per_beat,
+                                 lock=props.beat_lock)
+    return audio_phase(base_speed, onset, props.ripple_beat_gain, fps)
+
+
+def loop_pair(amp, ph, props):
+    """Apply the loop crossfade to a wave's amplitude and phase."""
+    fade = int(getattr(props, "loop_fade", 0))
+    if fade >= 2:
+        amp = make_loopable(amp, fade)
+        ph = make_loopable(ph, fade, wrap=True)
+    return np.asarray(amp), np.asarray(ph)
+
+
 def bake_ripple(obj, data, props, frames):
     from .constants import SK_RIPPLE_COS, SK_RIPPLE_SIN
     from .waveform import BAND_SPEED_RATIO
@@ -158,8 +191,9 @@ def bake_ripple(obj, data, props, frames):
         amp = analysis.envelope(amp, fps, props.attack_ms, props.release_ms)
         baked[name] = amp
 
-        ph = audio_phase(props.ripple_speed * speed_ratio, onset,
-                         props.ripple_beat_gain, fps)
+        ph = ripple_phase(data, props, frames,
+                          props.ripple_speed * speed_ratio, onset, fps)
+        amp, ph = loop_pair(amp, ph, props)
         bake_curve(key, 'key_blocks["%s"].value' % (SK_RIPPLE_SIN % i), -1, frames,
                    (amp * np.cos(ph)).astype(np.float32))
         bake_curve(key, 'key_blocks["%s"].value' % (SK_RIPPLE_COS % i), -1, frames,
@@ -194,7 +228,8 @@ def bake_spectral_ripple(obj, spec, data, props, frames):
                 col = col / peak
         amp = np.clip(col * props.master_gain, 0.0, 2.0)
         amp = analysis.envelope(amp, fps, props.attack_ms, props.release_ms)
-        ph = audio_phase(float(speeds[i]), onset, props.ripple_beat_gain, fps)
+        ph = ripple_phase(data, props, frames, float(speeds[i]), onset, fps)
+        amp, ph = loop_pair(amp, ph, props)
         bake_curve(key, 'key_blocks["%s"].value' % (SK_RIPPLE_SIN % i), -1, frames,
                    (amp * np.cos(ph)).astype(np.float32))
         bake_curve(key, 'key_blocks["%s"].value' % (SK_RIPPLE_COS % i), -1, frames,
@@ -214,7 +249,7 @@ def beat_locked_phase(n_frames, beats, fps, free_speed,cycles_per_beat = 1.0, lo
 
     slope = (targets[1] - targets[0]) / max(b[1] - b[0], 1e-6)
     head = t < b[0]
-    locked[head] = targets[0] - (b[0] - t[head] * slope)
+    locked[head] = targets[0] - (b[0] - t[head]) * slope
     slope_end = (targets[-1] - targets[-2]) / max(b[-1] - b[-2], 1e-6)
     tail = t > b[-1]
     locked[tail] = targets[-1] + (t[tail] - b[-1]) * slope_end
@@ -222,17 +257,30 @@ def beat_locked_phase(n_frames, beats, fps, free_speed,cycles_per_beat = 1.0, lo
     return ((1.0 - w) * free + w * locked).astype(np.float32)
 
 def make_loopable(values, fade_frames, wrap=False):
+    """Ramp the tail so the last frame lands on the first -- a clean loop.
+
+    A plain crossfade to the head is wrong here: it ends on values[fade-1],
+    not values[0], which leaves the seam open. Correcting by a ramped offset
+    guarantees out[-1] == out[0] and keeps the shape of the curve.
+    """
     v = np.asarray(values, dtype=np.float64).copy()
     n = v.size
-    f = int(min(fade_frames, n // 2))
-    if f < 2:
+    f = int(min(fade_frames, n))
+    if f < 2 or n < 2:
         return v.astype(np.float32)
-    w = np.linspace(0.0, 1.0, f)
-    head = v[:f]
+
+    target = v[0]
     if wrap:
-        head = head + np.round((v[-f:] - head) / (2.0 * np.pi)) * 2.0 * np.pi
-    v[-f:] = v[-f:] * (1.0 - w) + head * w
+        # Monotonic phase: aim at the nearest equivalent angle, so the
+        # correction stays small and the wave does not run backwards.
+        target = v[0] + np.round((v[-1] - v[0]) / (2.0 * np.pi)) * 2.0 * np.pi
+
+    delta = target - v[-1]
+    w = np.linspace(0.0, 1.0, f)
+    w = w * w * (3.0 - 2.0 * w)          # smoothstep, so the join has no kink
+    v[-f:] = v[-f:] + w * delta
     return v.astype(np.float32)
+
 
 def bake_emitters(obj, data, props, frames, beats):
     from .constants import SK_RIPPLE_COS, SK_RIPPLE_SIN
