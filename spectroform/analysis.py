@@ -331,3 +331,110 @@ def detect_sections(spec, fps, min_seconds=4.0, count=None):
         if count is not None and len(picks) >= count:
             break
     return np.array(sorted(picks), dtype=np.int32)
+
+
+def _local_contrast(onset, period):
+    x = np.asarray(onset, dtype=np.float64)
+    win = max(3, int(period * 2.0) | 1)
+    return x - np.convolve(x, np.ones(win) / float(win), mode="same")
+
+def beat_track(onset, fps, bpm, tightness=300.0, start_frame=0):
+    x = np.asarray(onset, dtype=np.float64)
+    n = x.size
+    if n < 4 or bpm <= 0.0:
+        return np.zeros(0, dtype=np.int32)
+    period = 60.0 * fps / float(bpm)
+    if period < 2.0 or period >= n:
+        return np.zeros(0, dtype=np.int32)
+
+    local = _local_contrast(x, period)
+
+    back = np.arange(-int(round(2.0 * period)), -int(round(0.5 * period)) + 1)
+    back = back[back < 0]
+    if back.size == 0:
+        return np.zeros(0, dtype=np.int32)
+    penalty = -tightness * (np.log(-back / period) ** 2)
+
+    score = np.full(n, -np.inf)
+    prev = np.full(n, -1, dtype=np.int32)
+    first = int(round(0.5 * period))
+    score[:first] = local[:first]
+
+    for i in range(first, n):
+        cand = i + back
+        ok = cand >= 0
+        if not ok.any():
+            score[i] = local[i]
+            continue
+        vals = score[cand[ok]] + penalty[ok]
+        j = int(np.argmax(vals))
+        if np.isfinite(vals[j]):
+            score[i] = local[i] + vals[j]
+            prev[i] = cand[ok][j]
+        else:
+            score[i] = local[i]
+
+    tail = max(0, n - int(round(period)))
+    i = int(tail + np.argmax(score[tail:]))
+    beats = []
+    while i >= 0:
+        beats.append(i)
+        i = int(prev[i])
+    beats.reverse()
+    return np.array(beats, dtype=np.int32) + int(start_frame)
+
+
+def local_tempo(beats, fps, smooth=5):
+    b = np.asarray(beats, dtype=np.float64)
+    if b.size < 2:
+        return np.zeros(0, dtype=np.float32)
+    bpms = 60.0 * float(fps) / np.maximum(np.diff(b), 1e-6)
+    k = max(1, int(smooth) | 1)
+    if bpms.size >= k:
+        pad = k // 2
+        padded = np.pad(bpms, (pad, pad), mode="edge")
+        bpms = np.array([np.median(padded[i:i + k]) for i in range(bpms.size)])
+    return np.append(bpms, bpms[-1]).astype(np.float32)
+
+
+def detect_downbeat(spec, bin_hz, beats, beats_per_bar=4, start_frame=0):
+    spec = np.asarray(spec, dtype=np.float64)
+    hz = np.asarray(bin_hz, dtype=np.float64)
+    idx = np.asarray(beats, dtype=np.int64) - int(start_frame)
+    idx = idx[(idx >= 0) & (idx < spec.shape[0])]
+    npb = max(2, int(beats_per_bar))
+    if idx.size < npb * 2:
+        return 0
+
+
+    low = hz < 150.0
+    if not low.any():
+        low = np.zeros(hz.shape, dtype=bool)
+        low[0] = True
+    bass = spec[:, low].sum(axis=1)
+    bass = bass / max(float(bass.max()), 1e-9)
+
+    change = np.abs(np.diff(spec, axis=0, prepend=spec[:1])).sum(axis=1)
+    change = change / max(float(change.max()), 1e-9)
+
+    strength = bass[idx] + change[idx]
+    best_phase, best_score = 0, -np.inf
+    for phase in range(npb):
+        picked = strength[phase::npb]
+        if picked.size == 0:
+            continue
+        others = np.delete(strength, np.arange(phase, strength.size, npb))
+        score = float(picked.mean() - (others.mean() if others.size else 0.0))
+        if score > best_score:
+            best_score, best_phase = score, phase
+    return best_phase
+
+def bar_frames(beats, beats_per_bar=4, phase=0):
+    b = np.asarray(beats, dtype=np.int32)
+    npb = max(1, int(beats_per_bar))
+    return b if b.size == 0 else b[int(phase) % npb::npb]
+
+
+def phrase_frames(bars, bars_per_phrase=4):
+    b = np.asarray(bars, dtype=np.int32)
+    return b if b.size == 0 else b[::max(1, int(bars_per_phrase))]

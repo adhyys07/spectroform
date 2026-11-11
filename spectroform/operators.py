@@ -50,9 +50,14 @@ class AUDIOGEO_OT_generate(Operator):
             )
             bpm, _lag = analysis.detect_tempo(data["onset"], props.bake_fps)
             data["bpm"] = bpm
-            data["beats"] = analysis.beat_frames(
-                data["onset"], props.bake_fps, bpm,
-                start_frame=props.frame_start)
+            if props.beat_tracker == "DP":
+                data["beats"] = analysis.beat_track(
+                    data["onset"], props.bake_fps, bpm,
+                    tightness=props.beat_tightness, start_frame=props.frame_start)
+                data["local_bpm"] = analysis.local_tempo(data["beats"], props.bake_fps)
+            else:
+                data["beats"] = analysis.beat_frames(
+                 data["onset"], props.bake_fps, bpm, start_frame=props.frame_start)
 
             n_frames = data["n_frames"]
             if n_frames > 30000:
@@ -117,6 +122,13 @@ class AUDIOGEO_OT_generate(Operator):
                 data["bpm"] = 60.0e6 / float(tempo)
 
             if spec is not None:
+                if props.use_bars:
+                    phase = analysis.detect_downbeat(
+                        spec, bin_hz, data["beats"], props.beats_per_bar,
+                        start_frame=props.frame_start)
+                data["downbeat_phase"] = phase
+                data["bars"] = analysis.bar_frames(data["beats"], props.beats_per_bar, phase)
+                data["phrases"] = analysis.phrase_frames(data["bars"], props.bars_per_phrase)
                 bin_hz = analysis.bin_frequencies(spec.shape[1])
                 data["sections"] = analysis.detect_sections(
                     spec, props.bake_fps, min_seconds=4.0)
@@ -156,6 +168,7 @@ class AUDIOGEO_OT_generate(Operator):
                     props.erosion_iterations, props.erosion_talus)
 
             obj = scene_build.create_object(context, geo, props.shade_smooth)
+            stamp.write(obj, props)
 
             wm.progress_update(65)
             if kind in RIPPLE_MODES:
@@ -375,6 +388,44 @@ class AUDIOGEO_OT_generate(Operator):
         props.last_report = msg
         self.report({"INFO"}, msg)
         return {"FINISHED"}
+
+class AUDIOGEO_OT_rebake(Operator):
+    bl_idname = "audiogeo.rebake"
+    bl_label = "Re-bake From Result"
+    bl_description = ("Restore the settings stamped on the generated object, "
+                      "then generate again")
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return stamp.read(bpy.data.objects.get(OBJ_NAME)) is not None
+
+    def execute(self, context):
+        values = stamp.read(bpy.data.objects.get(OBJ_NAME))
+        if values is None:
+            self.report({"ERROR"}, "No settings stamped on %s." % OBJ_NAME)
+            return {"CANCELLED"}
+        stamp.restore(context.scene.audiogeo, values, self.report)
+        return bpy.ops.audiogeo.generate()
+
+
+class AUDIOGEO_OT_copy_preset(Operator):
+    bl_idname = "audiogeo.copy_preset"
+    bl_label = "Copy As Preset"
+    bl_options = {"REGISTER"}
+
+    preset_name: bpy.props.StringProperty(name="Name", default="MY_LOOK")
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self)
+
+    def execute(self, context):
+        text = stamp.as_preset_source(context.scene.audiogeo,
+                                      self.preset_name.upper())
+        context.window_manager.clipboard = text
+        context.scene.audiogeo.last_report = "Preset %r copied" % self.preset_name
+        return {"FINISHED"}
+
 
 
 class AUDIOGEO_OT_export(Operator):

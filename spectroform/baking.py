@@ -436,12 +436,6 @@ def bake_faraday(obj, spec, data, props, frames):
 
 
 def bake_modal(obj, spec, data, props, frames, modes):
-    """Standing plate modes, each ringing at its own true modal frequency.
-
-    A drumhead's modal frequencies are proportional to the Bessel zeros, so
-    mode (m, n) is driven at k_mn / k_01 times the fundamental -- the real
-    ratios, not an even ramp.
-    """
     from .constants import SK_RIPPLE_COS, SK_RIPPLE_SIN
 
     fps = float(props.bake_fps)
@@ -473,7 +467,6 @@ def bake_modal(obj, spec, data, props, frames, modes):
 
 
 def bake_harmonic_rings(obj, spec, data, props, frames, count):
-    """One ring per partial, each pulsing with its own band's energy."""
     from .constants import SK_RIPPLE_COS, SK_RIPPLE_SIN
 
     fps = float(props.bake_fps)
@@ -493,7 +486,6 @@ def bake_harmonic_rings(obj, spec, data, props, frames, count):
         else:
             amp = analysis.envelope(drive, fps, props.attack_ms, props.release_ms)
         amp, _ph = loop_pair(amp, np.zeros_like(amp), props)
-        # The ring band sits in the SIN key; COS is a zero offset here.
         bake_curve(key, 'key_blocks["%s"].value' % (SK_RIPPLE_SIN % i), -1,
                    frames, amp.astype(np.float32))
         bake_curve(key, 'key_blocks["%s"].value' % (SK_RIPPLE_COS % i), -1,
@@ -503,7 +495,6 @@ def bake_harmonic_rings(obj, spec, data, props, frames, count):
 
 
 def collect_ripple_curves(obj, n_comp, n_frames):
-    """Read the baked SIN/COS values back out, for the web exporter."""
     from .constants import SK_RIPPLE_COS, SK_RIPPLE_SIN
 
     keys = obj.data.shape_keys
@@ -522,3 +513,20 @@ def collect_ripple_curves(obj, n_comp, n_frames):
             for f in range(min(n_frames, len(pts))):
                 dest[f, i] = pts[f].co[1]
     return sin_c, cos_c
+
+def bar_accent(n_frames, bars, phrases, fps, bar_gain=0.25, phrase_gain=0.6,
+               decay=0.35, start_frame=0):
+    out = np.zeros(int(n_frames), dtype=np.float64)
+    tau = max(float(decay) * float(fps), 1.0)
+    ramp = np.exp(-np.arange(0, int(tau * 4.0)) / tau)
+
+    for frames, gain in ((np.asarray(bars), bar_gain),
+                         (np.asarray(phrases), phrase_gain)):
+        if gain <= 0.0:
+            continue
+        for f in frames:
+            i = int(f) - int(start_frame)
+            if 0 <= i < out.size:
+                end = min(out.size, i + ramp.size)
+                out[i:end] = np.maximum(out[i:end], ramp[:end - i] * float(gain))
+    return out.astype(np.float32)

@@ -406,12 +406,6 @@ class AUDIOGEO_Props(PropertyGroup):
         description="Drive the two halves of the mesh from the L and R channels",
         default=False,
     )
-    colour_by_timbre: BoolProperty(
-        name="Colour By Timbre",
-        description="Emission hue follows the spectral centroid: blue when dark, "
-                    "red when bright",
-        default=True,
-    )
     add_camera: BoolProperty(
         name="Add Camera Rig",
         description="Create an orbiting camera framed on the result",
@@ -564,6 +558,44 @@ class AUDIOGEO_Props(PropertyGroup):
                     "curves travel, so it stays small",
         subtype="FILE_PATH", default="//spectroform.html",
     )
+    batch_folder: StringProperty(
+        name="Track Folder", subtype="DIR_PATH", default="",
+        description="Every supported audio file here is generated and rendered",
+    )
+    batch_output: StringProperty(
+        name="Output Folder", subtype="DIR_PATH", default="//renders/",
+        description="Videos are written here, named after each track",
+    )
+    batch_recursive: BoolProperty(
+        name="Include Subfolders", default=False,
+        description="Walk the folder tree rather than just its top level",
+    )
+    beat_tracker: EnumProperty(
+        name="Beat Tracking",
+        items=[("DP", "Adaptive", "Beats follow the onsets, so a drifting or "
+                                  "live tempo stays locked"),
+               ("GRID", "Fixed Grid", "One global BPM as a rigid grid. Exact "
+                                      "for programmed music")],
+        default="DP",
+    )
+    beat_tightness: FloatProperty(
+        name="Tempo Rigidity",
+        description="How hard the tracker holds a steady tempo. Low follows a "
+                    "human performance; high holds through sparse passages",
+        default=300.0, min=20.0, max=2000.0, soft_max=800.0,
+    )
+    use_bars: BoolProperty(name="Detect Bars", default=True,
+        description="Find the downbeat and group beats into bars")
+    beats_per_bar: IntProperty(name="Beats Per Bar", default=4, min=2, max=12,
+        description="Time signature numerator. 4 for most music, 3 for waltz")
+    bars_per_phrase: IntProperty(name="Bars Per Phrase", default=4, min=1, max=16,
+        description="Bars between the big accents -- where a build resolves")
+    bar_accent_gain: FloatProperty(name="Bar Accent", default=0.25, min=0.0, max=2.0,
+        description="Extra wave height on each bar line")
+    phrase_accent_gain: FloatProperty(name="Phrase Accent", default=0.6, min=0.0, max=2.0,
+        description="Extra wave height where a phrase turns over")
+
+
 
 
 classes = (AUDIOGEO_Props,)

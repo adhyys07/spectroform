@@ -1,6 +1,6 @@
 from bpy.types import Panel
 
-from .constants import SPECTRAL_BARS, SPECTRAL_STATIC
+from .constants import RIPPLE_MODES, SPECTRAL_BARS, SPECTRAL_STATIC
 
 
 class _Base:
@@ -254,6 +254,100 @@ class AUDIOGEO_PT_render(_Base, Panel):
 
         if context.scene.camera is None:
             layout.label(text="No camera: enable Add Camera Rig", icon="ERROR")
+
+class AUDIOGEO_PT_physics(_Base, Panel):
+    bl_label = "Physics"
+    bl_parent_id = "AUDIOGEO_PT_main"
+    bl_options = {"DEFAULT_CLOSED"}
+
+    @classmethod
+    def poll(cls, context):
+        kind = context.scene.audiogeo.geometry_type
+        return kind in RIPPLE_MODES or kind == "SPECTOGRAM"
+
+    def draw(self, context):
+        layout = self.layout
+        props = context.scene.audiogeo
+        layout.use_property_split = True
+        kind = props.geometry_type
+
+        if kind in RIPPLE_MODES:
+            col = layout.column(align=True)
+            col.prop(props, "use_dispersion")
+            if props.use_dispersion:
+                col.label(text="Speed ramp derived from wavelength", icon="INFO")
+            col.prop(props, "use_resonance")
+            sub = col.column(align=True)
+            sub.enabled = props.use_resonance
+            sub.prop(props, "resonance_q")
+
+        if kind == "SPECTROGRAM":
+            layout.separator()
+            box = layout.box()
+            box.label(text="Terrain Erosion", icon="MOD_FLUIDSIM")
+            c = box.column(align=True)
+            c.prop(props, "erosion_iterations")
+            sub = c.column(align=True)
+            sub.enabled = props.erosion_iterations > 0
+            sub.prop(props, "erosion_talus")
+
+class AUDIOGEO_PT_lighting(_Base, Panel):
+    bl_label = "Lightning and Effects"
+    bl_parent_id = "AUDIOGEO_PT_main"
+    bl_options = {"DEFAULT_CLOSED"}
+
+    def draw(self, context):
+        layout = self.layout
+        props = context.scene.audiogeo
+        layout.use_property_split = True
+
+        col = layout.column(align=True)
+        col.prop(props, "use_glare")
+        sub = col.column(align=True)
+        sub.enabled = props.use_glare and props.create_material
+        sub.prop(props, "glare_threshold")
+        if props.use_glare and not props.create_material:
+            col.label(text="Glare needs Create Material", icon="INFO")
+
+        layout.separator()
+        col = layout.column(align=True)
+        col.prop(props, "light_rig")
+        sub = col.column(align=True)
+        sub.enabled = props.light_rig
+        sub.prop(props, "light_power")
+
+        layout.separator()
+        layout.column(align=True).prop(props, "spark_count")
+
+        layout.separator()
+        col = layout.column(align=True)
+        col.prop(props, "camera_cuts")
+        if props.camera_cuts:
+            col.label(text="Overrides Add Camera Rig", icon="INFO")
+
+
+class AUDIOGEO_PT_extra(_Base, Panel):
+    bl_label = "Extra Input"
+    bl_parent_id = "AUDIOGEO_PT_main"
+    bl_options = {"DEFAULT_CLOSED"}
+
+    def draw(self, context):
+        layout = self.layout
+        props = context.scene.audiogeo
+        layout.use_property_split = True
+
+        col = layout.column(align=True)
+        col.prop(props, "midi_path")
+        if props.midi_path and props.ripple_source != "MIDI":
+            col.label(text="Set Wave Source to MIDI Channels", icon="INFO")
+        col.prop(props, "lyrics_path")
+
+        layout.separator()
+        box = layout.box()
+        box.label(text="WebGL Page", icon="WORLD")
+        c = box.column(align=True)
+        c.prop(props, "web_export_path")
+        c.operator("audiogeo.export_web", icon="EXPORT")
 
 
 classes = (
