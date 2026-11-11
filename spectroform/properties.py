@@ -230,6 +230,16 @@ class AUDIOGEO_Props(PropertyGroup):
             ("EMITTER", "Beat Emitters", "Each detected beat launches its own ripple burst"),
             ("HPSS", "Tonal / Percussive", "Long swells from sustained notes, "
                                            "fine chop from transients"),
+            ("CHLADNI", "Plate Modes", "Real drumhead eigenmodes -- the sand "
+                                       "figures on a vibrating plate"),
+            ("FARADAY", "Faraday Waves", "A vibrated fluid answers at HALF the "
+                                         "drive frequency"),
+            ("INTERFERENCE", "Stereo Interference", "Two real sources at the L "
+                                                    "and R positions, interfering"),
+            ("HARMONIC", "Harmonic Series", "Rings on the overtone series of "
+                                            "the detected key"),
+            ("MIDI", "MIDI Channels", "One wave per MIDI channel, from exact "
+                                      "note timing instead of onset detection"),
         ],
         default="SPECTRUM",
     )
@@ -458,6 +468,101 @@ class AUDIOGEO_Props(PropertyGroup):
     )
     render_path: StringProperty(
         name="Output", subtype="FILE_PATH", default="//spectroform.mp4",
+    )
+
+    # --- physics --------------------------------------------------------
+    use_dispersion: BoolProperty(
+        name="Water Dispersion",
+        description="Long waves travel faster, as in real water (omega = "
+                    "sqrt(g*k)). Overrides the fixed speed ramp, which has "
+                    "short waves outrunning long ones -- backwards",
+        default=True,
+    )
+    use_resonance: BoolProperty(
+        name="Resonant Surface",
+        description="Give the surface mass: it overshoots and rings instead of "
+                    "following the envelope exactly",
+        default=True,
+    )
+    resonance_q: FloatProperty(
+        name="Resonance Q",
+        description="How long the surface rings after a hit. High values sustain",
+        default=6.0, min=0.5, max=30.0, soft_max=15.0,
+    )
+    source_separation: FloatProperty(
+        name="Source Spacing",
+        description="Distance between the two interference sources, as a "
+                    "fraction of the radius",
+        default=0.5, min=0.0, max=1.0,
+    )
+    chladni_modes: IntProperty(
+        name="Plate Modes",
+        description="Membrane eigenmodes to drive, ordered by real frequency",
+        default=12, min=1, max=25, soft_max=16,
+    )
+    erosion_iterations: IntProperty(
+        name="Erosion",
+        description="Slump passes over a Spectrogram Terrain, so loud passages "
+                    "carve channels. 0 disables",
+        default=0, min=0, max=400, soft_max=120,
+    )
+    erosion_talus: FloatProperty(
+        name="Talus Angle",
+        description="Slope steeper than this collapses",
+        default=0.012, min=0.001, max=0.2,
+    )
+
+    # --- look / output --------------------------------------------------
+    use_glare: BoolProperty(
+        name="Add Glare",
+        description="EEVEE has no bloom toggle any more, so emission only "
+                    "glows with a compositor Glare node",
+        default=True,
+    )
+    glare_threshold: FloatProperty(
+        name="Glare Threshold",
+        description="Emission brighter than this blooms",
+        default=1.0, min=0.0, max=10.0,
+    )
+    camera_cuts: BoolProperty(
+        name="Cut On Sections",
+        description="One camera per detected section, bound to its marker, so "
+                    "Blender cuts between them automatically",
+        default=False,
+    )
+    light_rig: BoolProperty(
+        name="Audio Lights",
+        description="Three area lights whose power follows bass, mid and treble",
+        default=False,
+    )
+    light_power: FloatProperty(
+        name="Light Power",
+        description="Peak wattage per light, before the size correction",
+        default=120.0, min=0.0, max=2000.0, soft_max=600.0,
+    )
+    spark_count: IntProperty(
+        name="Sparks",
+        description="Particles emitted from the surface on transients. 0 disables",
+        default=0, min=0, max=20000, soft_max=4000,
+    )
+
+    # --- extra input ----------------------------------------------------
+    midi_path: StringProperty(
+        name="MIDI",
+        description="Optional MIDI file. Exact note timing, so the geometry "
+                    "cannot drift off the beat",
+        subtype="FILE_PATH", default="",
+    )
+    lyrics_path: StringProperty(
+        name="Lyrics",
+        description="Optional .lrc file; each line becomes a timed text object",
+        subtype="FILE_PATH", default="",
+    )
+    web_export_path: StringProperty(
+        name="Web Page",
+        description="Write a self-contained WebGL page. Only the coefficient "
+                    "curves travel, so it stays small",
+        subtype="FILE_PATH", default="//spectroform.html",
     )
 
 

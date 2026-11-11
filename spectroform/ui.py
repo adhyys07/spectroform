@@ -101,6 +101,21 @@ class AUDIOGEO_PT_geometry(_Base, Panel):
             elif props.ripple_source == "HPSS":
                 col.prop(props, "ripple_components")
                 col.prop(props, "hpss_kernel")
+            elif props.ripple_source == "CHLADNI":
+                col.prop(props, "chladni_modes")
+            elif props.ripple_source == "INTERFERENCE":
+                col.prop(props, "ripple_components")
+                col.prop(props, "ripple_spread")
+                col.prop(props, "source_separation")
+            elif props.ripple_source == "FARADAY":
+                col.prop(props, "ripple_components")
+                col.prop(props, "ripple_spread")
+            elif props.ripple_source == "HARMONIC":
+                col.prop(props, "ripple_components")
+            elif props.ripple_source == "MIDI":
+                col.prop(props, "midi_path")
+                col.prop(props, "ripple_components")
+                col.prop(props, "ripple_spread")
             col.prop(props, "ripple_cycles")
             col.prop(props, "ripple_speed")
             col.prop(props, "ripple_beat_gain")

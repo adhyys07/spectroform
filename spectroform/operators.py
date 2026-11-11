@@ -5,9 +5,14 @@ import bpy
 import numpy as np
 from bpy.types import Operator
 
-from . import analysis, audio_io, baking, geometry, scene_build, waveform
+from . import (analysis, audio_io, baking, geometry, physics, scene_build,
+               waveform)
 from .constants import (MAT_NAME, OBJ_NAME, RIPPLE_MODES,
                         SPECTRAL_BARS, SPECTRAL_STATIC)
+
+# Wave sources that need a spectrogram at ripple_components resolution.
+SPECTRAL_RIPPLE = {"SPECTRUM", "EMITTER", "HPSS", "FARADAY", "INTERFERENCE",
+                   "HARMONIC"}
 
 
 
@@ -67,7 +72,7 @@ class AUDIOGEO_OT_generate(Operator):
                     bins=props.spectrum_bins,
                     dynamic_range=props.dynamic_range,
                 )
-            elif kind in RIPPLE_MODES and props.ripple_source in {"SPECTRUM", "EMITTER", "HPSS"}:
+            elif kind in RIPPLE_MODES and props.ripple_source in SPECTRAL_RIPPLE:
                 if props.use_stereo and props.ripple_source == "SPECTRUM":
                     spec_l = analysis.spectrogram(
                         left, rate, props.bake_fps,
@@ -85,6 +90,31 @@ class AUDIOGEO_OT_generate(Operator):
                         bins=props.ripple_components,
                         dynamic_range=props.dynamic_range,
                     )
+            elif kind in RIPPLE_MODES and props.ripple_source == "CHLADNI":
+                # One band per plate mode, so each eigenmode has its own drive.
+                spec = analysis.spectrogram(
+                    samples, rate, props.bake_fps,
+                    bins=props.chladni_modes,
+                    dynamic_range=props.dynamic_range,
+                )
+            elif kind in RIPPLE_MODES and props.ripple_source == "MIDI":
+                if not props.midi_path:
+                    raise RuntimeError(
+                        "MIDI wave source needs a MIDI file.")
+                from . import midi_io
+                notes, tpb, tempo = midi_io.read_midi(
+                    bpy.path.abspath(props.midi_path))
+                if not notes:
+                    raise RuntimeError("No notes found in the MIDI file.")
+                fr_notes = midi_io.midi_to_frames(
+                    notes, tpb, tempo, props.bake_fps)
+                envs = midi_io.midi_envelopes(fr_notes, n_frames, props.bake_fps)
+                # Each channel becomes a column, so the rest of the pipeline
+                # treats MIDI exactly like a spectrogram.
+                chans = sorted(envs)[: props.ripple_components]
+                spec = np.stack([envs[c] for c in chans], axis=1).astype(np.float32)
+                data["midi_channels"] = len(chans)
+                data["bpm"] = 60.0e6 / float(tempo)
 
             if spec is not None:
                 bin_hz = analysis.bin_frequencies(spec.shape[1])
@@ -110,17 +140,20 @@ class AUDIOGEO_OT_generate(Operator):
                     props.tube_segments, props.time_steps)
             elif kind == "RIPPLE":
                 geo = waveform.build_ripple(
-                    props.resolution, props.size, props.ripple_pattern)
-            elif kind in SPECTRAL_BARS:
-                geo = waveform.build_spectrum_bars(
-                    props.spectrum_bins, props.size, radial=(kind == "BARS_RADIAL"))
-            elif kind == "RIPPLE":
-                geo = waveform.build_ripple(
                     props.resolution, props.size, props.ripple_pattern,
                     arms=props.ripple_arms, warp=props.ripple_turbulence,
                     seed=props.seed)
+            elif kind in SPECTRAL_BARS:
+                geo = waveform.build_spectrum_bars(
+                    props.spectrum_bins, props.size, radial=(kind == "BARS_RADIAL"))
             else:
                 geo = geometry.build_geometry(props)
+
+            if kind == "SPECTROGRAM" and props.erosion_iterations > 0:
+                rows = geo["verts"].shape[0] // spec.shape[1]
+                geo = waveform.erode_spectrogram(
+                    geo, rows, spec.shape[1],
+                    props.erosion_iterations, props.erosion_talus)
 
             obj = scene_build.create_object(context, geo, props.shade_smooth)
 
@@ -157,6 +190,46 @@ class AUDIOGEO_OT_generate(Operator):
                     scene_build.add_ripple_shape_keys(obj, pairs)
                     wm.progress_update(80)
                     baked = baking.bake_spectral_ripple(obj, spec, data, props, frames)
+                elif props.ripple_source == "CHLADNI":
+                    modes = physics.mode_table()[: props.chladni_modes]
+                    pairs = waveform.chladni_offsets(geo, props, modes)
+                    scene_build.add_ripple_shape_keys(obj, pairs)
+                    wm.progress_update(80)
+                    baked = baking.bake_modal(
+                        obj, spec, data, props, frames, modes)
+                    data["modes"] = len(modes)
+                elif props.ripple_source == "FARADAY":
+                    pairs = waveform.make_spectral_ripple_offsets(
+                        geo, props, spec.shape[1])
+                    scene_build.add_ripple_shape_keys(obj, pairs)
+                    wm.progress_update(80)
+                    baked = baking.bake_faraday(obj, spec, data, props, frames)
+                elif props.ripple_source == "INTERFERENCE":
+                    pairs = waveform.interference_offsets(
+                        geo, props, spec.shape[1])
+                    scene_build.add_ripple_shape_keys(obj, pairs)
+                    wm.progress_update(80)
+                    baked = baking.bake_spectral_ripple(
+                        obj, spec, data, props, frames)
+                elif props.ripple_source == "HARMONIC":
+                    chroma = analysis.chroma(samples, rate, props.bake_fps)
+                    tonic, _maj, key_name, _c = analysis.detect_key(chroma)
+                    data["key"] = key_name
+                    tonic_hz = 440.0 * (2.0 ** ((tonic - 9) / 12.0))
+                    count = min(spec.shape[1], props.ripple_components)
+                    pairs = waveform.harmonic_ring_offsets(
+                        geo, props, tonic_hz, count)
+                    scene_build.add_ripple_shape_keys(obj, pairs)
+                    wm.progress_update(80)
+                    baked = baking.bake_harmonic_rings(
+                        obj, spec, data, props, frames, count)
+                elif props.ripple_source == "MIDI":
+                    pairs = waveform.make_spectral_ripple_offsets(
+                        geo, props, spec.shape[1])
+                    scene_build.add_ripple_shape_keys(obj, pairs)
+                    wm.progress_update(80)
+                    baked = baking.bake_spectral_ripple(
+                        obj, spec, data, props, frames)
                 else:
                     pairs = waveform.make_ripple_offsets(geo, props)
                     scene_build.add_ripple_shape_keys(obj, pairs)
@@ -221,8 +294,52 @@ class AUDIOGEO_OT_generate(Operator):
                 scene_build.add_section_markers(
                     scene, data["sections"], props.frame_start)
 
-            if props.add_camera:
+            if props.camera_cuts:
+                # One camera per section, each bound to its own marker, so
+                # Blender cuts between them on playback.
+                scene_build.add_camera_cuts(
+                    context, props, data.get("sections", ()), props.frame_start)
+            elif props.add_camera:
                 scene_build.add_camera_rig(context, obj, frames, props)
+
+            if props.use_glare and props.create_material:
+                # EEVEE has no bloom toggle any more; without this the
+                # emission is bright but does not glow.
+                scene_build.setup_glare(scene, props.glare_threshold)
+
+            if props.light_rig:
+                scene_build.add_light_rig(context, props, frames, (
+                    ("Bass", data["bass"]),
+                    ("Mid", data["mid"]),
+                    ("Treble", data["treble"]),
+                ))
+
+            if props.spark_count > 0:
+                try:
+                    scene_build.add_onset_sparks(
+                        context, obj, props, data["onset"], frames)
+                except Exception as exc:
+                    self.report({"WARNING"}, "Sparks skipped: %s" % exc)
+
+            if props.lyrics_path:
+                from . import lyrics as lyrics_mod
+                try:
+                    lines = lyrics_mod.read_lrc(
+                        bpy.path.abspath(props.lyrics_path))
+                    built = lyrics_mod.build_lyrics(
+                        context, lines, props.bake_fps, props.frame_start,
+                        size=props.size * 0.15)
+                    data["lyrics"] = len(built)
+                except Exception as exc:
+                    self.report({"WARNING"}, "Lyrics skipped: %s" % exc)
+
+            if spec is not None and kind in RIPPLE_MODES:
+                # Hand the analysis to the live-preview handler, so slider
+                # tweaks can be seen without a re-bake.
+                from . import preview
+                cycles = waveform.ripple_component_cycles(
+                    spec.shape[1], props.ripple_cycles, props.ripple_spread)
+                preview.set_cache(spec, data, cycles, props.bake_fps)
 
             if props.sync_sound:
                 try:
@@ -249,6 +366,12 @@ class AUDIOGEO_OT_generate(Operator):
             msg += ", key %s" % data["key"]
         if len(data.get("sections", ())):
             msg += ", %d sections" % len(data["sections"])
+        if data.get("modes"):
+            msg += ", %d plate modes" % data["modes"]
+        if data.get("midi_channels"):
+            msg += ", %d MIDI channels" % data["midi_channels"]
+        if data.get("lyrics"):
+            msg += ", %d lyric lines" % data["lyrics"]
         props.last_report = msg
         self.report({"INFO"}, msg)
         return {"FINISHED"}
@@ -352,8 +475,64 @@ class AUDIOGEO_OT_clear(Operator):
         return {"FINISHED"}
 
 
+class AUDIOGEO_OT_export_web(Operator):
+    bl_idname = "audiogeo.export_web"
+    bl_label = "Export Web Page"
+    bl_description = ("Write a self-contained WebGL page. Only the two "
+                      "coefficient curves per wave travel, so the file stays "
+                      "small where a mesh cache would not")
+    bl_options = {"REGISTER"}
+
+    @classmethod
+    def poll(cls, context):
+        obj = bpy.data.objects.get(OBJ_NAME)
+        return obj is not None and obj.data.shape_keys is not None
+
+    def execute(self, context):
+        from . import webexport
+
+        props = context.scene.audiogeo
+        scene = context.scene
+        obj = bpy.data.objects.get(OBJ_NAME)
+
+        n_comp = sum(1 for k in obj.data.shape_keys.key_blocks
+                     if k.name.endswith("_SIN"))
+        if n_comp == 0:
+            self.report({"ERROR"},
+                        "Web export needs a ripple bake (no SIN keys found).")
+            return {"CANCELLED"}
+
+        n_frames = int(scene.frame_end - scene.frame_start) + 1
+        sin_c, cos_c = baking.collect_ripple_curves(obj, n_comp, n_frames)
+        if sin_c is None:
+            self.report({"ERROR"}, "No baked shape-key animation to export.")
+            return {"CANCELLED"}
+
+        cycles = waveform.ripple_component_cycles(
+            n_comp, props.ripple_cycles, props.ripple_spread)
+        path = bpy.path.abspath(props.web_export_path)
+        folder = os.path.dirname(path)
+        if folder and not os.path.isdir(folder):
+            os.makedirs(folder, exist_ok=True)
+
+        try:
+            size = webexport.export_web(
+                path, sin_c, cos_c, cycles,
+                audio_name=os.path.basename(bpy.path.abspath(props.audio_path)),
+                title="Spectroform")
+        except Exception as exc:
+            self.report({"ERROR"}, "Web export failed: %s" % exc)
+            return {"CANCELLED"}
+
+        props.last_report = "Web page: %s (%.0f KB, %d waves x %d frames)" % (
+            path, size / 1024.0, n_comp, n_frames)
+        self.report({"INFO"}, props.last_report)
+        return {"FINISHED"}
+
+
 classes = (
     AUDIOGEO_OT_generate,
     AUDIOGEO_OT_export,
+    AUDIOGEO_OT_export_web,
     AUDIOGEO_OT_clear,
 )

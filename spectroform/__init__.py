@@ -13,18 +13,23 @@ if "bpy" in locals():
     import importlib
 
     for _mod in (
-        constants,     
-        audio_io,      
-        analysis,      
-        geometry,      
-        baking,        
-        scene_build,   
+        constants,
+        audio_io,
+        analysis,
+        physics,
+        geometry,
+        baking,
+        scene_build,
         waveform,
-        properties,    
+        midi_io,
+        lyrics,
+        webexport,
+        properties,
         presets,
         render,
-        operators,     
-        ui,            
+        preview,
+        operators,
+        ui,
     ):
         importlib.reload(_mod)
 else:
@@ -34,13 +39,18 @@ else:
         baking,
         constants,
         geometry,
+        lyrics,
+        midi_io,
         operators,
+        physics,
         presets,
+        preview,
         properties,
         render,
         scene_build,
         ui,
         waveform,
+        webexport,
     )
 
 import bpy
@@ -48,7 +58,7 @@ from bpy.props import PointerProperty
 
 from .constants import MIN_BLENDER
 
-CLASSES = (properties.classes + operators.classes
+CLASSES = (properties.classes + operators.classes + preview.classes
            + presets.classes + render.classes + ui.classes)
 
 
@@ -66,6 +76,10 @@ def register():
 
 
 def unregister():
+    # The frame_change handler holds a reference into this module, so it
+    # keeps firing after an unregister unless it is removed explicitly.
+    preview.unregister_handler()
+
     if hasattr(bpy.types.Scene, "audiogeo"):
         del bpy.types.Scene.audiogeo
 

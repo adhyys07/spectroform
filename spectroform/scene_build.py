@@ -220,7 +220,7 @@ def add_colour_attribute(obj, rgba, name="Spectroform_Colour"):
     mesh.update()
     return attr
 
-def wire_colour_into_material(mat, attr_name="Spectroform_Colout"):
+def wire_colour_into_material(mat, attr_name="Spectroform_Colour"):
     nodes, links = mat.node_tree.nodes, mat.node_tree.links
     bsdf = next((n for n in nodes if n.type == "BSDF_PRINCIPLED"), None)
     if bsdf is None:
@@ -276,3 +276,101 @@ def bake_bar_objects(objs, spec, props, frames):
                               fps, props.attack_ms, props.release_ms)
         baking.bake_curve(o, "scale", 2, frames,
                           (0.02 + h * props.spec_height * props.size).astype(np.float32))
+
+def setup_glare(scene, threshold=1.0, size=8, mix=0.0):
+    scene.use_nodes = True
+    tree = scene.node_tree
+    glare = next((n for n in tree.nodes if n.type == "GLARE"), None)
+    if glare is None:
+        glare = tree.nodes.new("CompositorNodeGlare")
+    glare.glare_type = "FOG_GLOW"
+    glare.quality = "HIGH"
+    glare.threshold = threshold
+    glare.size = size
+    glare.mix = mix
+
+    layers = next((n for n in tree.nodes if n.type == "R_LAYERS"), None)
+    composite = next((n for n in tree.nodes if n.type == "COMPOSITE"), None)
+    if layers and composite:
+        tree.links.new(layers.outputs["Image"], glare.inputs["Image"])
+        tree.links.new(glare.outputs["Image"], composite.inputs["Image"])
+    return glare
+
+
+def add_camera_cuts(context, props, bounds, frame_start):
+    import math as _m
+
+    scene = context.scene
+    angles = ((0.0, 1.9, 0.55), (_m.pi * 0.6, 1.2, 0.25),
+              (_m.pi * 1.2, 2.6, 0.9), (_m.pi * 1.7, 0.9, 0.15))
+    frames = [int(frame_start)] + [int(b) + int(frame_start) for b in bounds]
+
+    cams = []
+    for i, frame in enumerate(frames):
+        name = "Spectroform_Cam_%d" % i
+        cam = bpy.data.objects.get(name)
+        if cam is None:
+            cam = bpy.data.objects.new(name, bpy.data.cameras.new(name))
+            context.collection.objects.link(cam)
+        ang, dist, height = angles[i % len(angles)]
+        cam.location = (_m.cos(ang) * props.size * dist,
+                        _m.sin(ang) * props.size * dist,
+                        props.size * height)
+        track = cam.constraints.get("SF_Track") or cam.constraints.new("TRACK_TO")
+        track.name = "SF_Track"
+        track.target = bpy.data.objects.get(OBJ_NAME)
+        track.track_axis = "TRACK_NEGATIVE_Z"
+        track.up_axis = "UP_Y"
+
+        marker = next((m for m in scene.timeline_markers if m.frame == frame), None)
+        if marker is None:
+            marker = scene.timeline_markers.new("SF_Cut_%d" % i, frame=frame)
+        marker.camera = cam
+        cams.append(cam)
+
+    scene.camera = cams[0]
+    return cams
+
+
+def add_light_rig(context, props, frames, bands):
+    from . import baking
+
+    colours = ((1.0, 0.25, 0.2), (0.2, 1.0, 0.45), (0.35, 0.5, 1.0))
+    places = ((-1.0, -1.0, 1.0), (1.0, -0.8, 1.2), (0.0, 1.2, 1.4))
+    out = []
+    for i, (name, band) in enumerate(bands):
+        key = "Spectroform_Light_%s" % name
+        obj = bpy.data.objects.get(key)
+        if obj is None:
+            data = bpy.data.lights.new(key, type="AREA")
+            obj = bpy.data.objects.new(key, data)
+            context.collection.objects.link(obj)
+        obj.data.color = colours[i % 3]
+        obj.data.size = props.size * 0.8
+        obj.location = tuple(c * props.size for c in places[i % 3])
+
+        watts = (props.light_power * (0.1 + np.asarray(band, dtype=np.float32))
+                 * props.size ** 2)
+        baking.bake_curve(obj.data, "energy", -1, frames, watts)
+        out.append(obj)
+    return out
+
+
+def add_onset_sparks(context, obj, props, onset, frames):
+    psys = obj.modifiers.get("SF_Sparks")
+    if psys is None:
+        psys = obj.modifiers.new("SF_Sparks", type="PARTICLE_SYSTEM")
+    settings = psys.particle_system.settings
+    settings.count = int(props.spark_count)
+    settings.lifetime = max(4, int(props.bake_fps * 0.8))
+    settings.frame_start = int(frames[0])
+    settings.frame_end = int(frames[-1])
+    settings.emit_from = "FACE"
+    settings.use_emit_random = True
+    settings.normal_factor = props.size * 0.4
+    settings.factor_random = props.size * 0.2
+    settings.physics_type = "NEWTON"
+    settings.effector_weights.gravity = 0.25
+    settings.render_type = "HALO"
+    settings.particle_size = props.size * 0.004
+    return psys

@@ -356,3 +356,76 @@ def frequency_colours(geo,props, spec=None):
     rgba = np.ones((t.size, 4), dtype=np.float32)
     rgba[:, :3] = lut[idx]
     return rgba
+
+
+def chladni_offsets(geo, props, modes):
+    from .physics import bessel_j
+
+    verts = geo["verts"]
+    normals = geo["normals"]
+    falloff = geo["falloff"][:, None]
+    unit = max(props.size, 1e-4)
+    x, y = verts[:, 0], verts[:, 1]
+    r = np.sqrt(x * x + y * y) / max(props.size * 0.5, 1e-6)
+    theta = np.arctan2(y, x)
+
+    out = []
+    for i, (m, _n, k) in enumerate(modes):
+        shape = (bessel_j(m, k * np.clip(r, 0.0, 1.0)) *
+                 np.cos(m * theta)).astype(np.float32)[:, None]
+        amp = unit * props.terrain_strength / np.sqrt(float(len(modes)))
+        out.append((verts, verts - normals * (shape * amp) * falloff))
+    return out
+
+
+def interference_offsets(geo, props, n_components):
+    verts = geo["verts"]
+    normals = geo["normals"]
+    falloff = geo["falloff"][:, None]
+    unit = max(props.size, 1e-4)
+    half = max(props.size * 0.5, 1e-6)
+    x, y = verts[:, 0], verts[:, 1]
+
+    sep = half * float(props.source_separation)
+    r1 = np.sqrt((x - sep) ** 2 + y * y) / half
+    r2 = np.sqrt((x + sep) ** 2 + y * y) / half
+
+    cycles = ripple_component_cycles(n_components, props.ripple_cycles,
+                                     props.ripple_spread)
+
+    out = []
+    for i in range(n_components):
+        k = 2.0 * np.pi * max(float(cycles[i]), 0.01)
+        amp = unit * props.terrain_strength / np.sqrt(float(n_components))
+        s = (np.sin(r1 * k) + np.sin(r2 * k)).astype(np.float32)[:, None] * 0.5
+        c = (np.cos(r1 * k) + np.cos(r2 * k)).astype(np.float32)[:, None] * 0.5
+        out.append((verts + normals * (s * amp) * falloff,
+                    verts + normals * (c * amp) * falloff))
+    return out
+
+
+def harmonic_ring_offsets(geo, props, tonic_hz, count):
+    from .physics import harmonic_radii
+
+    verts = geo["verts"]
+    normals = geo["normals"]
+    falloff = geo["falloff"][:, None]
+    unit = max(props.size, 1e-4)
+    x, y = verts[:, 0], verts[:, 1]
+    r = np.sqrt(x * x + y * y)
+
+    radii = harmonic_radii(tonic_hz, count, props.size)
+    width = max(props.size / (count * 3.0), 1e-4)
+    out = []
+    for i, rad in enumerate(radii):
+        band = np.exp(-((r - rad) / width) ** 2).astype(np.float32)[:, None]
+        amp = unit * props.terrain_strength / np.sqrt(float(count))
+        out.append((verts + normals * (band * amp) * falloff, verts))
+    return out
+
+def erode_spectrogram(geo, res_rows, res_cols, iterations, talus):
+    from .physics import thermal_erode
+
+    z = geo["verts"][:, 2].reshape(res_rows, res_cols)
+    geo["verts"][:, 2] = thermal_erode(z, iterations, talus).ravel()
+    return geo

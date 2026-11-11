@@ -212,7 +212,17 @@ def bake_spectral_ripple(obj, spec, data, props, frames):
     onset = analysis.envelope(data["onset"], fps, 8.0, max(40.0, props.release_ms * 0.5))
     ratio = (np.linspace(0.0, 1.0, n_comp, dtype=np.float32)
              if n_comp > 1 else np.zeros(1, dtype=np.float32))
-    speeds = props.ripple_speed * (2.0 ** (ratio * props.ripple_spread * 0.5))
+
+    if getattr(props, "use_dispersion", False):
+        # omega = sqrt(g*k): long waves outrun short ones. The 2**ratio ramp
+        # below does the opposite, which is why it reads as animated noise.
+        from . import physics, waveform
+        cycles = waveform.ripple_component_cycles(
+            n_comp, props.ripple_cycles, props.ripple_spread)
+        speeds = physics.dispersion_speeds(
+            cycles, props.size, scale=props.ripple_speed)
+    else:
+        speeds = props.ripple_speed * (2.0 ** (ratio * props.ripple_spread * 0.5))
 
     for i in range(n_comp):
         col = spec[:, i]
@@ -221,7 +231,13 @@ def bake_spectral_ripple(obj, spec, data, props, frames):
             if peak > 1e-6:
                 col = col / peak
         amp = np.clip(col * props.master_gain, 0.0, 2.0)
-        amp = analysis.envelope(amp, fps, props.attack_ms, props.release_ms)
+        if getattr(props, "use_resonance", False):
+            # A resonator at the component's own frequency: the surface gains
+            # mass, so it overshoots and rings instead of stopping dead.
+            amp = resonant_amplitude(
+                amp, props, fps, max(abs(float(speeds[i])), 0.05))
+        else:
+            amp = analysis.envelope(amp, fps, props.attack_ms, props.release_ms)
         ph = ripple_phase(data, props, frames, float(speeds[i]), onset, fps)
         amp, ph = loop_pair(amp, ph, props)
         bake_curve(key, 'key_blocks["%s"].value' % (SK_RIPPLE_SIN % i), -1, frames,
@@ -372,3 +388,137 @@ def bake_drum_emitters(obj, props, frames, spec, bin_hz):
                    (amp * np.cos(ph)).astype(np.float32))
         bake_curve(key, 'key_blocks["%s"].value' % (SK_RIPPLE_COS % s), -1, frames,
                    (-amp * np.sin(ph)).astype(np.float32))
+
+
+def dispersion_phase(cycles, props, frames, fps, beats=None):
+    from .physics import dispersion_speeds
+
+    speeds = dispersion_speeds(cycles, props.size, scale=props.ripple_speed)
+    t = (np.asarray(frames, dtype=np.float64) - float(frames[0])) / fps
+    return [(2.0 * np.pi * float(s) * t).astype(np.float32) for s in speeds]
+
+
+def resonant_amplitude(drive, props, fps, f0, q=None):
+    from .physics import resonator
+
+    return resonator(np.asarray(drive, dtype=np.float64), f0,
+                     q if q is not None else props.resonance_q, fps)
+
+
+def bake_faraday(obj, spec, data, props, frames):
+    from .constants import SK_RIPPLE_COS, SK_RIPPLE_SIN
+
+    fps = float(props.bake_fps)
+    key = obj.data.shape_keys
+    n_comp = spec.shape[1]
+    t = (np.asarray(frames, dtype=np.float64) - float(frames[0])) / fps
+
+    ratio = (np.linspace(0.0, 1.0, n_comp, dtype=np.float32)
+             if n_comp > 1 else np.zeros(1, dtype=np.float32))
+
+    drive_hz = props.ripple_speed * (2.0 ** (ratio * props.ripple_spread * 0.5))
+
+    for i in range(n_comp):
+        col = spec[:, i]
+        peak = float(col.max())
+        if props.per_band_level and peak > 1e-6:
+            col = col / peak
+        amp = resonant_amplitude(np.clip(col * props.master_gain, 0.0, 2.0),
+                                 props, fps, max(drive_hz[i] * 0.5, 0.05))
+        ph = (2.0 * np.pi * float(drive_hz[i]) * 0.5 * t).astype(np.float32)
+        amp, ph = loop_pair(amp, ph, props)
+        bake_curve(key, 'key_blocks["%s"].value' % (SK_RIPPLE_SIN % i), -1, frames,
+                   (amp * np.cos(ph)).astype(np.float32))
+        bake_curve(key, 'key_blocks["%s"].value' % (SK_RIPPLE_COS % i), -1, frames,
+                   (-amp * np.sin(ph)).astype(np.float32))
+
+    return bake_object_motion(obj, data, props, frames)
+
+
+def bake_modal(obj, spec, data, props, frames, modes):
+    """Standing plate modes, each ringing at its own true modal frequency.
+
+    A drumhead's modal frequencies are proportional to the Bessel zeros, so
+    mode (m, n) is driven at k_mn / k_01 times the fundamental -- the real
+    ratios, not an even ramp.
+    """
+    from .constants import SK_RIPPLE_COS, SK_RIPPLE_SIN
+
+    fps = float(props.bake_fps)
+    key = obj.data.shape_keys
+    n_comp = min(spec.shape[1], len(modes))
+    t = (np.asarray(frames, dtype=np.float64) - float(frames[0])) / fps
+    k0 = max(float(modes[0][2]), 1e-6)
+    zeros = np.zeros(len(frames), dtype=np.float32)
+
+    for i in range(n_comp):
+        f_mode = abs(props.ripple_speed) * (float(modes[i][2]) / k0)
+        f_mode = min(f_mode, fps * 0.45)          # never key above Nyquist
+        col = spec[:, i]
+        peak = float(col.max())
+        if props.per_band_level and peak > 1e-6:
+            col = col / peak
+        drive = np.clip(col * props.master_gain, 0.0, 2.0)
+        amp = resonant_amplitude(drive, props, fps, max(f_mode, 0.05))
+        ph = (2.0 * np.pi * f_mode * t).astype(np.float32)
+        amp, ph = loop_pair(amp, ph, props)
+        # The mode shape lives in the COS key; the SIN key is a zero offset,
+        # because a standing mode does not travel.
+        bake_curve(key, 'key_blocks["%s"].value' % (SK_RIPPLE_SIN % i), -1,
+                   frames, zeros)
+        bake_curve(key, 'key_blocks["%s"].value' % (SK_RIPPLE_COS % i), -1,
+                   frames, (-amp * np.sin(ph)).astype(np.float32))
+
+    return bake_object_motion(obj, data, props, frames)
+
+
+def bake_harmonic_rings(obj, spec, data, props, frames, count):
+    """One ring per partial, each pulsing with its own band's energy."""
+    from .constants import SK_RIPPLE_COS, SK_RIPPLE_SIN
+
+    fps = float(props.bake_fps)
+    key = obj.data.shape_keys
+    n_comp = min(spec.shape[1], count)
+    zeros = np.zeros(len(frames), dtype=np.float32)
+
+    for i in range(n_comp):
+        col = spec[:, i]
+        peak = float(col.max())
+        if props.per_band_level and peak > 1e-6:
+            col = col / peak
+        drive = np.clip(col * props.master_gain, 0.0, 2.0)
+        if getattr(props, "use_resonance", False):
+            amp = resonant_amplitude(drive, props, fps,
+                                     max(abs(props.ripple_speed), 0.05))
+        else:
+            amp = analysis.envelope(drive, fps, props.attack_ms, props.release_ms)
+        amp, _ph = loop_pair(amp, np.zeros_like(amp), props)
+        # The ring band sits in the SIN key; COS is a zero offset here.
+        bake_curve(key, 'key_blocks["%s"].value' % (SK_RIPPLE_SIN % i), -1,
+                   frames, amp.astype(np.float32))
+        bake_curve(key, 'key_blocks["%s"].value' % (SK_RIPPLE_COS % i), -1,
+                   frames, zeros)
+
+    return bake_object_motion(obj, data, props, frames)
+
+
+def collect_ripple_curves(obj, n_comp, n_frames):
+    """Read the baked SIN/COS values back out, for the web exporter."""
+    from .constants import SK_RIPPLE_COS, SK_RIPPLE_SIN
+
+    keys = obj.data.shape_keys
+    action = keys.animation_data.action if keys and keys.animation_data else None
+    if action is None:
+        return None, None
+
+    sin_c = np.zeros((n_frames, n_comp), dtype=np.float32)
+    cos_c = np.zeros((n_frames, n_comp), dtype=np.float32)
+    for i in range(n_comp):
+        for name, dest in ((SK_RIPPLE_SIN, sin_c), (SK_RIPPLE_COS, cos_c)):
+            fc = find_fcurve(action, 'key_blocks["%s"].value' % (name % i), -1)
+            if fc is None:
+                continue
+            pts = fc.keyframe_points
+            for f in range(min(n_frames, len(pts))):
+                dest[f, i] = pts[f].co[1]
+    return sin_c, cos_c
