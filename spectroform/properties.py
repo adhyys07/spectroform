@@ -108,6 +108,7 @@ class AUDIOGEO_Props(PropertyGroup):
             ("WAVE_RING", "Waveform Ring", "The waveform tube bent into a closed ring"),
             ("BARS_RADIAL", "Spectrum Bars (Radial)", "Animated bar per frequency bin, in a circle"),
             ("BARS_LINE", "Spectrum Bars (Line)", "Animated bar per frequency bin, in a row"),
+            ("MELODY", "Melody Ribbon", ...),
             ("GRID", "Grid (Noise)", "Flat plane displaced by a noise field"),
             ("SPHERE", "Sphere (Noise)", "UV sphere displaced by a noise field"),
             ("CYLINDER", "Cylinder (Noise)", "Open tube displaced by a noise field"),
@@ -594,6 +595,15 @@ class AUDIOGEO_Props(PropertyGroup):
         description="Extra wave height on each bar line")
     phrase_accent_gain: FloatProperty(name="Phrase Accent", default=0.6, min=0.0, max=2.0,
         description="Extra wave height where a phrase turns over")
+    pitch_min: FloatProperty(name="Lowest Pitch", default=70.0, min=20.0, max=2000.0,
+        description="Bottom of the tracked range in hertz. Raise it to stop "
+                    "the bass line being mistaken for the tune")
+    pitch_max: FloatProperty(name="Highest Pitch", default=1200.0, min=100.0, max=8000.0,
+        description="Top of the tracked range in hertz")
+    pitch_gap: IntProperty(name="Bridge Gaps", default=8, min=0, max=120,
+        description="Unvoiced frames bridged between notes. Longer silences "
+                    "stay as breaks in the ribbon")
+
 
 
 

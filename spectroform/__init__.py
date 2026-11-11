@@ -15,6 +15,7 @@ if "bpy" in locals():
     for _mod in (
         constants,
         audio_io,
+        cache,
         analysis,
         physics,
         geometry,
@@ -24,10 +25,13 @@ if "bpy" in locals():
         midi_io,
         lyrics,
         webexport,
+        texture,
+        stamp,
         properties,
         presets,
         render,
         preview,
+        batch,
         operators,
         ui,
     ):
@@ -37,6 +41,8 @@ else:
         analysis,
         audio_io,
         baking,
+        batch,
+        cache,
         constants,
         geometry,
         lyrics,
@@ -48,6 +54,8 @@ else:
         properties,
         render,
         scene_build,
+        stamp,
+        texture,
         ui,
         waveform,
         webexport,
@@ -59,7 +67,7 @@ from bpy.props import PointerProperty
 from .constants import MIN_BLENDER
 
 CLASSES = (properties.classes + operators.classes + preview.classes
-           + presets.classes + render.classes + ui.classes)
+           + presets.classes + render.classes + batch.classes + ui.classes)
 
 
 def register():

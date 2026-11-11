@@ -73,7 +73,8 @@ class AUDIOGEO_OT_batch(Operator):
         try:
             if bpy.ops.audiogeo.generate() != {"FINISHED"}:
                 raise RuntimeError("generate failed")
-            if bpy.ops.audiogeo.render(preview=False) != {"FINISHED"}:
+            if bpy.ops.audiogeo.render(preview=False,
+                                       blocking=True) != {"FINISHED"}:
                 raise RuntimeError("render failed")
             self._done.append(track)
         except Exception as exc:

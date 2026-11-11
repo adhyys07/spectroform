@@ -29,6 +29,7 @@ class AUDIOGEO_PT_main(_Base, Panel):
         row = layout.row(align=True)
         row.prop(props, "replace_existing", toggle=True)
         row.operator("audiogeo.clear", text="", icon="TRASH")
+        layout.operator("audiogeo.preview", icon="PLAY_SOUND")
 
         if props.last_report:
             box = layout.box()
@@ -131,6 +132,12 @@ class AUDIOGEO_PT_geometry(_Base, Panel):
         if kind == "SPECTROGRAM":
             col.prop(props, "scroll_terrain")
 
+        if kind == "MELODY":
+            col.prop(props, "pitch_min")
+            col.prop(props, "pitch_max")
+            col.prop(props, "pitch_gap")
+            col.prop(props, "spec_height", text="Height")
+
         if kind in SPECTRAL_BARS or kind == "SPECTROGRAM":
             col.prop(props, "spectrum_bins")
             col.prop(props, "spec_height")
@@ -227,10 +234,17 @@ class AUDIOGEO_PT_presets(_Base, Panel):
 
     def draw(self, context):
         from .presets import PRESETS
-        col = self.layout.column(align=True)
+        layout = self.layout
+        col = layout.column(align=True)
         for key in PRESETS:
             col.operator("audiogeo.preset",
                          text=key.replace("_", " ").title()).preset = key
+
+        layout.separator()
+        col = layout.column(align=True)
+        col.operator("audiogeo.copy_preset", icon="COPYDOWN")
+        col.operator("audiogeo.load_stamp", icon="PASTEDOWN")
+        col.operator("audiogeo.rebake", icon="FILE_REFRESH")
 
 
 class AUDIOGEO_PT_render(_Base, Panel):
@@ -350,12 +364,69 @@ class AUDIOGEO_PT_extra(_Base, Panel):
         c.operator("audiogeo.export_web", icon="EXPORT")
 
 
+class AUDIOGEO_PT_timing(_Base, Panel):
+    bl_label = "Timing"
+    bl_parent_id = "AUDIOGEO_PT_main"
+    bl_options = {"DEFAULT_CLOSED"}
+
+    def draw(self, context):
+        layout = self.layout
+        props = context.scene.audiogeo
+        layout.use_property_split = True
+
+        col = layout.column(align=True)
+        col.prop(props, "beat_tracker")
+        sub = col.column(align=True)
+        sub.enabled = props.beat_tracker == "DP"
+        sub.prop(props, "beat_tightness")
+
+        layout.separator()
+        col = layout.column(align=True)
+        col.prop(props, "use_bars")
+        sub = col.column(align=True)
+        sub.enabled = props.use_bars
+        sub.prop(props, "beats_per_bar")
+        sub.prop(props, "bars_per_phrase")
+        sub.prop(props, "bar_accent_gain")
+        sub.prop(props, "phrase_accent_gain")
+        if props.use_bars and props.geometry_type not in RIPPLE_MODES:
+            # bar_accent is applied by the ripple bakers only.
+            col.label(text="Accents apply to Water Ripple", icon="INFO")
+
+
+class AUDIOGEO_PT_batch(_Base, Panel):
+    bl_label = "Batch"
+    bl_parent_id = "AUDIOGEO_PT_main"
+    bl_options = {"DEFAULT_CLOSED"}
+
+    def draw(self, context):
+        layout = self.layout
+        props = context.scene.audiogeo
+        layout.use_property_split = True
+
+        col = layout.column(align=True)
+        col.prop(props, "batch_folder")
+        col.prop(props, "batch_output")
+        col.prop(props, "batch_recursive")
+
+        # No track count here on purpose: draw() runs on every redraw, and a
+        # directory scan per redraw stalls the UI on a network path.
+        layout.operator("audiogeo.batch", icon="RENDER_ANIMATION")
+        layout.label(text="Blender is blocked while each track renders",
+                     icon="INFO")
+
+
 classes = (
     AUDIOGEO_PT_main,
     AUDIOGEO_PT_frequency,
     AUDIOGEO_PT_geometry,
+    AUDIOGEO_PT_physics,
+    AUDIOGEO_PT_timing,
     AUDIOGEO_PT_motion,
+    AUDIOGEO_PT_lighting,
+    AUDIOGEO_PT_extra,
     AUDIOGEO_PT_export,
     AUDIOGEO_PT_presets,
     AUDIOGEO_PT_render,
+    AUDIOGEO_PT_batch,
 )

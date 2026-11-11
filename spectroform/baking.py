@@ -202,7 +202,7 @@ def bake_scroll(obj, props, frames):
     bake_curve(obj, "location", 0, frames,
                np.linspace(x0, -x0, n).astype(np.float32))
 
-def bake_spectral_ripple(obj, spec, data, props, frames):
+def bake_spectral_ripple(obj, spec, data, props, frames, cycles=None):
     from .constants import SK_RIPPLE_COS, SK_RIPPLE_SIN
 
     fps = float(props.bake_fps)
@@ -217,12 +217,26 @@ def bake_spectral_ripple(obj, spec, data, props, frames):
         # omega = sqrt(g*k): long waves outrun short ones. The 2**ratio ramp
         # below does the opposite, which is why it reads as animated noise.
         from . import physics, waveform
-        cycles = waveform.ripple_component_cycles(
-            n_comp, props.ripple_cycles, props.ripple_spread)
+        if cycles is None:
+            cycles = waveform.ripple_component_cycles(
+                n_comp, props.ripple_cycles, props.ripple_spread)
         speeds = physics.dispersion_speeds(
             cycles, props.size, scale=props.ripple_speed)
+    elif cycles is not None:
+        # Caller-supplied wavelengths are not evenly spread, so the even ramp
+        # would put every wave at the wrong speed for its own size.
+        base = float(np.min(cycles)) or 1.0
+        speeds = props.ripple_speed * np.sqrt(
+            np.asarray(cycles, dtype=np.float64) / base)
     else:
         speeds = props.ripple_speed * (2.0 ** (ratio * props.ripple_spread * 0.5))
+
+    accent = None
+    if getattr(props, "use_bars", False) and len(data.get("bars", ())):
+        accent = bar_accent(
+            len(frames), data.get("bars", ()), data.get("phrases", ()),
+            fps, props.bar_accent_gain, props.phrase_accent_gain,
+            start_frame=props.frame_start)
 
     for i in range(n_comp):
         col = spec[:, i]
@@ -238,6 +252,10 @@ def bake_spectral_ripple(obj, spec, data, props, frames):
                 amp, props, fps, max(abs(float(speeds[i])), 0.05))
         else:
             amp = analysis.envelope(amp, fps, props.attack_ms, props.release_ms)
+        if accent is not None:
+            # Hierarchy, not extra level: the accent scales whatever the band
+            # is already doing, so a bar line in a quiet passage stays quiet.
+            amp = amp * (1.0 + accent[:amp.size])
         ph = ripple_phase(data, props, frames, float(speeds[i]), onset, fps)
         amp, ph = loop_pair(amp, ph, props)
         bake_curve(key, 'key_blocks["%s"].value' % (SK_RIPPLE_SIN % i), -1, frames,

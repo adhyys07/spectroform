@@ -5,14 +5,14 @@ import bpy
 import numpy as np
 from bpy.types import Operator
 
-from . import (analysis, audio_io, baking, geometry, physics, scene_build,
-               waveform)
+from . import (analysis, audio_io, baking, cache, geometry, physics,
+               scene_build, stamp, waveform)
 from .constants import (MAT_NAME, OBJ_NAME, RIPPLE_MODES,
                         SPECTRAL_BARS, SPECTRAL_STATIC)
 
 # Wave sources that need a spectrogram at ripple_components resolution.
 SPECTRAL_RIPPLE = {"SPECTRUM", "EMITTER", "HPSS", "FARADAY", "INTERFERENCE",
-                   "HARMONIC"}
+                   "HARMONIC", "STEMS"}
 
 
 
@@ -35,19 +35,31 @@ class AUDIOGEO_OT_generate(Operator):
         wm.progress_begin(0, 100)
         try:
             wm.progress_update(5)
+            audio_key = bpy.path.abspath(props.audio_path)
             if props.use_stereo:
-                samples, left, right, rate = audio_io.load_audio_channels(
-                    props.audio_path)
+                (samples, left, right, rate), _hit = cache.memo(
+                    audio_key, "channels",
+                    lambda: audio_io.load_audio_channels(props.audio_path))
             else:
-                samples, rate = audio_io.load_audio(props.audio_path)
+                (samples, rate), _hit = cache.memo(
+                    audio_key, "mono",
+                    lambda: audio_io.load_audio(props.audio_path))
                 left = right = samples
 
             wm.progress_update(20)
-            data = analysis.analyse_audio(
-                samples, rate, props.bake_fps,
-                props.bass_max, props.mid_max, props.dynamic_range,
-                per_band=props.per_band_level,
-            )
+            # Every argument that changes the result is named in the key. Miss
+            # one and a slider silently stops taking effect, so they are listed
+            # explicitly rather than hashed from the whole property group.
+            data, cached = cache.memo(
+                audio_key, "bands",
+                lambda: analysis.analyse_audio(
+                    samples, rate, props.bake_fps,
+                    props.bass_max, props.mid_max, props.dynamic_range,
+                    per_band=props.per_band_level,
+                ),
+                fps=props.bake_fps, bass_max=props.bass_max,
+                mid_max=props.mid_max, dynamic_range=props.dynamic_range,
+                per_band=props.per_band_level, stereo=props.use_stereo)
             bpm, _lag = analysis.detect_tempo(data["onset"], props.bake_fps)
             data["bpm"] = bpm
             if props.beat_tracker == "DP":
@@ -155,6 +167,19 @@ class AUDIOGEO_OT_generate(Operator):
                     props.resolution, props.size, props.ripple_pattern,
                     arms=props.ripple_arms, warp=props.ripple_turbulence,
                     seed=props.seed)
+            elif kind == "MELODY":
+                hz, conf = analysis.pitch_contour(
+                samples, rate, props.bake_fps,
+                fmin=props.pitch_min, fmax=props.pitch_max)
+                hz = analysis.fill_unvoiced(hz, conf, props.pitch_gap)
+                unit = analysis.pitch_to_unit(
+                    hz, props.pitch_min, props.pitch_max)
+                data["pitch_hz"], data["pitch_conf"] = hz, conf
+                data["pitch_unit"] = unit
+                geo = waveform.build_melody_ribbon(
+                    unit, conf, props.size, props.time_steps,
+                    height=props.spec_height)
+            
             elif kind in SPECTRAL_BARS:
                 geo = waveform.build_spectrum_bars(
                     props.spectrum_bins, props.size, radial=(kind == "BARS_RADIAL"))
@@ -175,8 +200,6 @@ class AUDIOGEO_OT_generate(Operator):
                 if props.ripple_source == "HPSS":
                     harm, perc = analysis.hpss(
                         spec, props.hpss_kernel, props.hpss_kernel)
-                    # Alternate tonal/percussive, matching the builder's
-                    # alternating wavelengths.
                     spec = harm.copy()
                     spec[:, 1::2] = perc[:, 1::2]
                     pairs = waveform.make_hpss_ripple_offsets(
@@ -203,6 +226,31 @@ class AUDIOGEO_OT_generate(Operator):
                     scene_build.add_ripple_shape_keys(obj, pairs)
                     wm.progress_update(80)
                     baked = baking.bake_spectral_ripple(obj, spec, data, props, frames)
+                elif props.ripple_source == "STEMS":
+                    stems = analysis.nmf_stems(
+                        spec, bin_hz,
+                        # More templates than bins is degenerate, and
+                        # ripple_components can be as low as 1.
+                        components=min(props.nmf_components, spec.shape[1]),
+                        iterations=props.nmf_iterations, seed=props.seed,
+                        fps=props.bake_fps, attack_ms=props.attack_ms,
+                        release_ms=props.release_ms)
+                    names = [n for n in analysis.STEM_NAMES
+                             if stems[n].max() > 1e-6]
+                    if not names:
+                        raise RuntimeError(
+                            "Stem separation found nothing to drive.")
+                    pairs = waveform.make_stem_ripple_offsets(
+                        geo, props, names)
+                    scene_build.add_ripple_shape_keys(obj, pairs)
+                    wm.progress_update(80)
+                    # The bakers all take (frames, components), so stacking the
+                    # envelopes lets the existing spectral baker work unchanged.
+                    stem_spec = np.stack([stems[n] for n in names], axis=1)
+                    baked = baking.bake_spectral_ripple(
+                        obj, stem_spec, data, props, frames,
+                        cycles=waveform.stem_cycles(props, names))
+                    data["stems"] = names
                 elif props.ripple_source == "CHLADNI":
                     modes = physics.mode_table()[: props.chladni_modes]
                     pairs = waveform.chladni_offsets(geo, props, modes)
@@ -385,6 +433,18 @@ class AUDIOGEO_OT_generate(Operator):
             msg += ", %d MIDI channels" % data["midi_channels"]
         if data.get("lyrics"):
             msg += ", %d lyric lines" % data["lyrics"]
+        if len(data.get("bars", ())):
+            msg += ", %d bars" % len(data["bars"])
+        if data.get("local_bpm") is not None and len(data["local_bpm"]):
+            lo, hi = float(min(data["local_bpm"])), float(max(data["local_bpm"]))
+            if hi - lo > 2.0:
+                msg += " (tempo %.0f-%.0f)" % (lo, hi)
+        if data.get("stems"):
+            msg += ", stems: %s" % "/".join(s.lower() for s in data["stems"])
+        if cached:
+            # "Did it actually skip the analysis" is the first question when a
+            # tweak comes back suspiciously fast.
+            msg += " [cached]"
         props.last_report = msg
         self.report({"INFO"}, msg)
         return {"FINISHED"}
@@ -407,6 +467,25 @@ class AUDIOGEO_OT_rebake(Operator):
             return {"CANCELLED"}
         stamp.restore(context.scene.audiogeo, values, self.report)
         return bpy.ops.audiogeo.generate()
+
+
+class AUDIOGEO_OT_load_stamp(Operator):
+    bl_idname = "audiogeo.load_stamp"
+    bl_label = "Settings From Selected"
+    bl_description = ("Copy the settings stamped on the selected object into "
+                      "the panel, without re-baking")
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return stamp.read(context.active_object) is not None
+
+    def execute(self, context):
+        values = stamp.read(context.active_object)
+        n, _skipped = stamp.restore(context.scene.audiogeo, values, self.report)
+        context.scene.audiogeo.last_report = "Loaded %d settings from %s" % (
+            n, context.active_object.name)
+        return {"FINISHED"}
 
 
 class AUDIOGEO_OT_copy_preset(Operator):
@@ -586,4 +665,7 @@ classes = (
     AUDIOGEO_OT_export,
     AUDIOGEO_OT_export_web,
     AUDIOGEO_OT_clear,
+    AUDIOGEO_OT_rebake,
+    AUDIOGEO_OT_load_stamp,
+    AUDIOGEO_OT_copy_preset,
 )

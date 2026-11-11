@@ -10,6 +10,9 @@ def snapshot(props, include_local=True):
     for name, prop in props.bl_rna.properties.items():
         if name in {"rna_type", "name"} or name in _SKIP or prop.is_readonly:
             continue
+        if not include_local and getattr(prop, "subtype", "NONE") in {
+                "FILE_PATH", "DIR_PATH", "FILE_NAME"}:
+            continue
         if name in _LOCAL and not include_local:
             continue
         value = getattr(props, name)

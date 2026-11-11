@@ -429,3 +429,87 @@ def erode_spectrogram(geo, res_rows, res_cols, iterations, talus):
     z = geo["verts"][:, 2].reshape(res_rows, res_cols)
     geo["verts"][:, 2] = thermal_erode(z, iterations, talus).ravel()
     return geo
+
+def _reduce_rows_mean(mat, target):
+    """Block mean rather than block max.
+
+    _reduce_rows maxes, which is right for a spectrogram (peaks must survive)
+    and wrong for a pitch axis -- it would pick the highest note in each block
+    and bend the whole melody upward.
+    """
+    n = mat.shape[0]
+    if target >= n:
+        return mat.astype(np.float32)
+    bounds = np.linspace(0, n, target + 1).astype(int)
+    rows = [mat[a:max(b, a + 1)].mean(axis=0)
+            for a, b in zip(bounds[:-1], bounds[1:])]
+    return np.asarray(rows, dtype=np.float32)
+
+def build_melody_ribbon(unit, conf, size, steps, width=0.12, height=0.5):
+    u_in = np.asarray(unit, dtype=np.float32).reshape(-1, 1)
+    c_in = np.asarray(conf, dtype=np.float32).reshape(-1, 1)
+    # _reduce_rows returns the input untouched when asked for more rows than it
+    # has, so a clip shorter than time_steps would disagree with the linspace
+    # below and fail to broadcast.
+    steps = max(8, min(int(steps), u_in.shape[0]))
+
+    u = _reduce_rows_mean(u_in, steps).ravel()
+    c = _reduce_rows(c_in, steps).ravel()   # max is right here: keep the peaks
+
+    x = np.linspace(-size * 0.5, size * 0.5, steps, dtype=np.float32)
+    z = (u - 0.5) * (size * float(height))
+    half = (size * float(width)) * (0.25 + 0.75 * c) * 0.5
+
+    verts = np.empty((steps * 2, 3), dtype=np.float32)
+    verts[0::2, 0] = verts[1::2, 0] = x
+    verts[0::2, 1], verts[1::2, 1] = -half, half
+    verts[0::2, 2] = verts[1::2, 2] = z
+
+    faces = [(i * 2, i * 2 + 1, i * 2 + 3, i * 2 + 2) for i in range(steps - 1)]
+    return {
+        "verts": verts,
+        "normals": np.tile(np.array([0.0, 0.0, 1.0], dtype=np.float32),
+                           (verts.shape[0], 1)),
+        "faces": faces,
+        "falloff": np.ones(verts.shape[0], dtype=np.float32),
+        "wave": np.repeat(np.linspace(0.0, 1.0, steps).astype(np.float32), 2),
+        "pitch": np.repeat(u, 2),
+    }
+
+
+def melody_colours(geo, saturation=0.9):
+    import colorsys
+    pitch = geo.get("pitch")
+    if pitch is None:
+        return None
+    rgba = np.ones((pitch.size, 4), dtype=np.float32)
+    for i, p in enumerate(pitch):
+        rgba[i, :3] = colorsys.hsv_to_rgb((float(p) * 12.0) % 1.0, saturation, 1.0)
+    return rgba
+
+
+# Kick gets the longest wavelength and hats the finest chop. Fixed rather than
+# exposed, because it is the one assignment that reads correctly.
+STEM_CYCLE_MULT = {"KICK": 0.6, "BASS": 1.0, "VOCAL": 2.2, "OTHER": 4.0}
+STEM_AMP_SHARE = {"KICK": 1.0, "BASS": 0.7, "VOCAL": 0.5, "OTHER": 0.35}
+
+def stem_cycles(props, stem_names):
+    """Spatial frequency per stem.
+
+    The single definition the geometry and the baker must agree on: the shape
+    keys are built at these wavelengths, so dispersion speed and the resonator
+    frequency have to be derived from the same numbers or the waves travel at
+    the wrong speed for their own size.
+    """
+    return np.array(
+        [max(props.ripple_cycles * STEM_CYCLE_MULT.get(n, 2.0), 0.01)
+         for n in stem_names], dtype=np.float32)
+
+def make_stem_ripple_offsets(geo, props, stem_names):
+    """One travelling wave per stem, sized by what that stem sounds like."""
+    unit = max(props.size, 1e-4)
+    cycles = stem_cycles(props, stem_names)
+    return [wave_pair(geo, props, 2.0 * np.pi * float(cycles[i]),
+                      unit * float(props.terrain_strength)
+                      * STEM_AMP_SHARE.get(name, 0.5))
+            for i, name in enumerate(stem_names)]

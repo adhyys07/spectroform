@@ -18,6 +18,10 @@ class AUDIOGEO_OT_render(Operator):
     bl_options = {"REGISTER"}
 
     preview: bpy.props.BoolProperty(default=False)
+    blocking: bpy.props.BoolProperty(
+        default=False,
+        description="Wait for the render to finish instead of opening the "
+                    "render window. Needed when a script renders a queue")
 
     @classmethod
     def poll(cls, context):
@@ -49,7 +53,13 @@ class AUDIOGEO_OT_render(Operator):
             self.report({"ERROR"}, "No camera. Enable Add Camera Rig and re-bake.")
             return {"CANCELLED"}
 
-        bpy.ops.render.render("INVOKE_DEFAULT", animation=True)
+        if self.blocking:
+            # EXEC context: returns only once the whole animation is written.
+            # INVOKE_DEFAULT returns immediately, so a caller rendering a queue
+            # would overwrite the scene while this render was still running.
+            bpy.ops.render.render(animation=True)
+        else:
+            bpy.ops.render.render("INVOKE_DEFAULT", animation=True)
         props.last_report = "Rendering to %s" % path
         return {"FINISHED"}
 

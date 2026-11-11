@@ -12,6 +12,9 @@ MAJOR_PROFILE = np.array([6.35, 2.23, 3.48, 2.33, 4.38, 4.09,
 MINOR_PROFILE = np.array([6.33, 2.68, 3.52, 5.38, 2.60, 3.53,
                           2.54, 4.75, 3.98, 2.69, 3.34, 3.17])
 
+STEM_NAMES = ("KICK", "BASS", "VOCAL", "OTHER")
+
+
 def db_normalise(values, dynamic_range, top=None):
     db = 20.0 * np.log10(np.maximum(values, 1e-9))
     if top is None:
@@ -335,7 +338,9 @@ def detect_sections(spec, fps, min_seconds=4.0, count=None):
 
 def _local_contrast(onset, period):
     x = np.asarray(onset, dtype=np.float64)
-    win = max(3, int(period * 2.0) | 1)
+    win = min(max(3, int(period * 2.0) | 1), (x.size - 1) | 1)
+    if win < 3:
+        return x - x.mean()
     return x - np.convolve(x, np.ones(win) / float(win), mode="same")
 
 def beat_track(onset, fps, bpm, tightness=300.0, start_frame=0):
@@ -438,3 +443,234 @@ def bar_frames(beats, beats_per_bar=4, phase=0):
 def phrase_frames(bars, bars_per_phrase=4):
     b = np.asarray(bars, dtype=np.int32)
     return b if b.size == 0 else b[::max(1, int(bars_per_phrase))]
+
+def pitch_contout(samples, rate, fps, fmin=70.0, fmax=1200.0, win=2048, threshold=0.3):
+    hop = max(1, int(round(rate / float(fps))))
+    win = int(win)
+    while win < hop * 2:
+        win *= 2
+    lag_min = max(2, int(math.floor(rate / float(fmax))))
+    lag_max = min(win - 1, int(math.ceil(rate / float(fmin))))
+    if lag_max <= lag_min:
+        return np.zeros(2, dtype=np.float32), np.zeros(2, dtype=np.float32)
+
+    n_frames = max(2, int(math.ceil(samples.size / float(hop))))
+    padded = np.zeros(n_frames * hop + win, dtype=np.float32)
+    padded[: samples.size] = samples
+
+    hz = np.zeros(n_frames, dtype=np.float32)
+    conf = np.zeros(n_frames, dtype=np.float32)
+    window = np.hanning(win).astype(np.float32)
+
+    size = 1
+    while size < win * 2:
+        size *=2
+
+    for start in range(0, n_frames, 128):
+        end = min(start + 128, n_frames)
+        block = np.stack([padded[o: o + win]
+                          for o in np.arange(start, end) * hop])
+        block = (block - block.mean(axis=1, keepdims=True)) * window
+        energy = (block ** 2).sum(axis=1)
+
+        spec = np.fft.rfft(block, n=size, axis=1)
+        ac = np.fft.irfft(spec * np.conj(spec), n=size, axis=1)[:, :lag_max + 1]
+
+        norm = ac[:, lag_min:lag_max + 1] / np.maximum(ac[:, 0], 1e-9)[:, None]
+        peak = np.argmax(norm, axis=1)
+        value = norm[np.arange(norm.shape[0]), peak]
+
+        for r in range(norm.shape[0]):
+            if energy[r] < 1e-6 or value[r] < threshold:
+                continue
+            lag = lag_min + int(peak[r])
+
+            if lag_min < lag < lag_max:
+                y0, y1, y2 = (float(ac[r, lag - 1]), float(ac[r, lag]),
+                              float(ac[r, lag + 1]))
+                denom = y0 - 2.0 * y1 + y2
+                shift = 0.5 * (y0 - y2) / denom if abs(denom) > 1e-12 else 0.0
+                shift = float(np.clip(shift, -0.5, 0.5))
+            else:
+                shift = 0.0
+            hz[start + r] = rate / (lag + shift)
+            conf[start + r] = float(value[r])
+
+    return hz, conf
+
+def pitch_contour(samples, rate, fps, fmin=70.0, fmax=1200.0, win=2048,
+                  threshold=0.3):
+    """Per-frame fundamental and confidence.
+
+    Normalised autocorrelation, which on a real mix tracks whatever is loudest
+    and most periodic -- usually the lead vocal or lead synth. Monophonic by
+    construction: a chord gives whichever partial dominates. hz is 0 where the
+    frame is unvoiced, so callers must not interpolate across zeros blindly --
+    use fill_unvoiced() for that.
+    """
+    hop = max(1, int(round(rate / float(fps))))
+    win = int(win)
+    while win < hop * 2:
+        win *= 2
+
+    n_frames = max(2, int(math.ceil(samples.size / float(hop))))
+
+    lag_min = max(2, int(math.floor(rate / float(fmax))))
+    lag_max = min(win - 1, int(math.ceil(rate / float(fmin))))
+    if lag_max <= lag_min:
+        # Callers index this by frame, so the degenerate case must still come
+        # back frame-shaped.
+        return (np.zeros(n_frames, dtype=np.float32),
+                np.zeros(n_frames, dtype=np.float32))
+
+    padded = np.zeros(n_frames * hop + win, dtype=np.float32)
+    padded[: samples.size] = samples
+
+    hz = np.zeros(n_frames, dtype=np.float32)
+    conf = np.zeros(n_frames, dtype=np.float32)
+    window = np.hanning(win).astype(np.float32)
+
+    # FFT autocorrelation in blocks: np.correlate per frame is ~40x slower and
+    # this runs over the whole track.
+    size = 1
+    while size < win * 2:
+        size *= 2
+
+    for start in range(0, n_frames, 128):
+        end = min(start + 128, n_frames)
+        block = np.stack([padded[o: o + win]
+                          for o in np.arange(start, end) * hop])
+        block = (block - block.mean(axis=1, keepdims=True)) * window
+        energy = (block ** 2).sum(axis=1)
+
+        spec = np.fft.rfft(block, n=size, axis=1)
+        ac = np.fft.irfft(spec * np.conj(spec), n=size, axis=1)[:, :lag_max + 1]
+
+        norm = ac[:, lag_min:lag_max + 1] / np.maximum(ac[:, 0], 1e-9)[:, None]
+        peak = np.argmax(norm, axis=1)
+        value = norm[np.arange(norm.shape[0]), peak]
+
+        for r in range(norm.shape[0]):
+            if energy[r] < 1e-6 or value[r] < threshold:
+                continue
+            lag = lag_min + int(peak[r])
+            # Parabolic interpolation: without it the pitch quantises to
+            # integer lags, which shows as stair-stepping in the high register.
+            if lag_min < lag < lag_max:
+                y0, y1, y2 = (float(ac[r, lag - 1]), float(ac[r, lag]),
+                              float(ac[r, lag + 1]))
+                denom = y0 - 2.0 * y1 + y2
+                shift = 0.5 * (y0 - y2) / denom if abs(denom) > 1e-12 else 0.0
+                shift = float(np.clip(shift, -0.5, 0.5))
+            else:
+                shift = 0.0
+            hz[start + r] = rate / (lag + shift)
+            conf[start + r] = float(value[r])
+
+    return hz, conf
+
+def fill_unvoiced(hz, conf, max_gap_frames=8):
+    hz = np.asarray(hz, dtype=np.float32).copy()
+    voiced = hz > 0.0
+    if not voiced.any():
+        return hz
+    idx = np.flatnonzero(voiced)
+    hz[:idx[0]] = hz[idx[0]]
+    hz[idx[-1] + 1:] = hz[idx[-1]]
+
+    gap_start = None
+    for i in range(idx[0], idx[-1] + 1):
+        if hz[i] > 0.0:
+            if gap_start is not None:
+                length = i - gap_start
+                if length <= max_gap_frames:
+                    hz[gap_start:i] = np.linspace(
+                        hz[gap_start - 1], hz[i], length + 2)[1:-1]
+                gap_start = None
+        elif gap_start is None:
+            gap_start = i
+    return hz
+
+
+def pitch_to_unit(hz, fmin=70.0, fmax=1200.0):
+    hz = np.asarray(hz, dtype=np.float64)
+    lo, hi = math.log2(max(fmin, 1.0)), math.log2(max(fmax, fmin * 2.0))
+    out = (np.log2(np.maximum(hz, 1e-6)) - lo) / max(hi - lo, 1e-9)
+    return np.clip(np.where(hz > 0.0, out, 0.0), 0.0, 1.0).astype(np.float32)
+
+def nmf(spec, components=6, iterations=120, seed=0):
+    V = np.maximum(np.asarray(spec, dtype=np.float64).T, 1e-9)
+    bins, frames = V.shape
+    k = max(1, int(components))
+
+    rng = np.random.RandomState(int(seed))
+    W = rng.rand(bins, k) + 0.1
+    H = rng.rand(k, frames) + 0.1
+    ones = np.ones_like(V)
+
+    for _ in range(int(iterations)):
+        WH = W @ H + 1e-9
+        H *= (W.T @ (V / WH)) / np.maximum(W.T @ ones, 1e-9)
+        WH = W @ H + 1e-9
+        W *= ((V / WH) @ H.T) / np.maximum(ones @ H.T, 1e-9)
+        norm = np.maximum(W.sum(axis=0, keepdims=True), 1e-9)
+        W /= norm
+        H *= norm.T
+
+    return W.T.astype(np.float32), H.T.astype(np.float32)
+
+def _flatness(template):
+    t = np.maximum(np.asarray(template, dtype=np.float64), 1e-9)
+    return float(np.exp(np.log(t).mean()) / max(t.mean(), 1e-9))
+
+
+def _percussiveness(activation):
+    a = np.asarray(activation, dtype=np.float64)
+    if a.size < 2 or a.max() <= 1e-9:
+        return 0.0
+    return float(np.maximum(np.diff(a, prepend=a[:1]), 0.0).sum()
+                 / max(a.sum(), 1e-9))
+
+
+def classify_components(W, H, bin_hz):
+    hz = np.asarray(bin_hz, dtype=np.float64)
+    labels = []
+    for c in range(W.shape[0]):
+        w = np.maximum(W[c].astype(np.float64), 1e-9)
+        centroid = float((w * hz).sum() / max(w.sum(), 1e-9))
+        flat, perc = _flatness(w), _percussiveness(H[:, c])
+
+        if centroid < 160.0 and perc > 0.18:
+            labels.append("KICK")
+        elif centroid < 260.0:
+            labels.append("BASS")
+        elif 200.0 <= centroid <= 4000.0 and flat < 0.35 and perc < 0.25:
+            labels.append("VOCAL")
+        else:
+            labels.append("OTHER")
+    return labels
+
+
+def nmf_stems(spec, bin_hz, components=6, iterations=120, seed=0, fps=None, attack_ms=10.0, release_ms=120.0):
+    W, H = nmf(spec, components=components, iterations=iterations, seed=seed)
+    labels = classify_components(W, H, bin_hz)
+
+    out = {}
+    for name in STEM_NAMES:
+        cols = [i for i, lab in enumerate(labels) if lab == name]
+        env = H[:, cols].sum(axis=1) if cols else np.zeros(H.shape[0], np.float32)
+        peak = float(env.max())
+        if peak > 1e-9:
+            env = env / peak
+        if fps is not None:
+            env = envelope(env.astype(np.float32), float(fps),
+                           attack_ms, release_ms)
+        out[name] = np.asarray(env, dtype=np.float32)
+
+    out["_labels"], out["_templates"] = labels, W
+    return out
+
+def stem_reconstruct(spec, W, H, columns):
+    full = np.maximum(H @ W, 1e-9)
+    part = H[:, columns] @ W[columns]
+    return (np.asarray(spec, dtype=np.float32) * (part / full)).astype(np.float32)

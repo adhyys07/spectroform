@@ -27,12 +27,13 @@ def memo(path, kind, builder, **params):
 
     _STATS["misses"] += 1
     value = builder()
+    stored = dict(value) if isinstance(value, dict) else value
     if k not in _STORE and len(_ORDER) >= _MAX_ENTRIES:
         _STORE.pop(_ORDER.pop(0), None)
     if k not in _STORE:
         _ORDER.append(k)
-    _STORE[k] = value
-    return value, False
+    _STORE[k] = stored
+    return (dict(stored) if isinstance(stored, dict) else stored), False
 
 def clear():
     _STORE.clear()
