@@ -171,7 +171,12 @@ def add_camera_rig(context, obj, frames, props):
     context.scene.camera = cam
     return cam
 
-def bake_emission_hue(mat, frames, centroid):
+def bake_emission_hue(mat, frames, hue, sat=0.85):
+    """Animate the emission colour. `hue` and `sat` are per-frame, 0..1.
+
+    A colour socket's default_value is a 4-float array, so these take a real
+    channel index -- unlike the scalar sockets, which need -1.
+    """
     import colorsys
     from . import baking
 
@@ -186,8 +191,88 @@ def bake_emission_hue(mat, frames, centroid):
     if idx is None:
         return
 
+    hue = np.asarray(hue, dtype=np.float32).ravel()
+    sat = np.broadcast_to(np.asarray(sat, dtype=np.float32).ravel(), hue.shape)
     path = 'nodes["%s"].inputs[%d].default_value' % (bsdf.name, idx)
-    rgb = np.array([colorsys.hsv_to_rgb(0.66 * (1.0 - float(c)), 0.85, 1.0)
-                    for c in centroid], dtype=np.float32)
+    rgb = np.array([colorsys.hsv_to_rgb(float(h) % 1.0, float(sv), 1.0)
+                    for h, sv in zip(hue, sat)], dtype=np.float32)
     for c in range(3):
         baking.bake_curve(mat.node_tree, path, c, frames, rgb[:, c])
+
+def add_section_markers(scene, bounds, frame_start):
+    for m in [m for m in scene.timeline_markers if m.name.startswith("SF_")]:
+        scene.timeline_markers.remove(m)
+    for i, b in enumerate(bounds):
+        scene.timeline_markers.new("SF_Section_%d" % (i + 1),
+                                   frame=int(b) + int(frame_start))
+
+
+def add_colour_attribute(obj, rgba, name="Spectroform_Colour"):
+    mesh = obj.data
+    attr = mesh.color_attributes.get(name)
+    if attr is None:
+        attr = mesh.color_attributes.new(name=name, type="FLOAT_COLOR",
+                                         domain="POINT")
+    flat = np.ascontiguousarray(rgba, dtype=np.float32).ravel()
+    if len(attr.data) * 4 != flat.size:
+        return None
+    attr.data.foreach_set("color", flat)
+    mesh.update()
+    return attr
+
+def wire_colour_into_material(mat, attr_name="Spectroform_Colout"):
+    nodes, links = mat.node_tree.nodes, mat.node_tree.links
+    bsdf = next((n for n in nodes if n.type == "BSDF_PRINCIPLED"), None)
+    if bsdf is None:
+        return
+    node = next((n for n in nodes if n.type == "VERTEX_COLOR"), None)
+    if node is None:
+        node = nodes.new("ShaderNodeVertexColor")
+        node.location = (bsdf.location.x - 320, bsdf.location.y - 180)
+    node.layer_name = attr_name
+    sock = bsdf.inputs.get("Emission Color") or bsdf.inputs.get("Emission")
+    if sock is not None:
+        links.new(node.outputs["Color"], sock)
+
+def build_bar_objects(context, bins, size, radial=True):
+    import math as _m
+
+    parent = bpy.data.objects.new("Spectroform_Bars", None)
+    context.collection.objects.link(parent)
+
+    mesh = bpy.data.meshes.new("Spectroform_Bar")
+    bm = mesh.new()
+    bmesh.ops.create_cube(bm, size = 1.0)
+    for v in bm.verts:
+        v.co.z += 0.5
+    bm.to_mesh(mesh)
+    bm.free
+
+    objs = []
+    for b in range(bins):
+        o = bpy.data.objects.new("Spectroform_Bar_%02d" % b, mesh)
+        context.collection.objects.link(o)
+        o.parent = parent
+        if radial:
+            a = 2.0 * _m.pi * b/bins
+            o.location = (_m.cos(a) * size * 0.4, _m.sin(a) * size * 0.4, 0.0)
+            o.rotation_euler = (0.0, 0.0, a)
+        else:
+            o.location = (-size * 0.5 + size * (b + 0.5) / bins, 0.0, 0.0)
+        o.scale = (size / bins * 0.6, size / bins * 0.6, 0.05)
+        objs.append(o)
+    return parent, objs
+
+
+def bake_bar_objects(objs, spec, props, frames):
+    from . import baking
+    fps = float(props.bake_fps)
+    for b, o in enumerate(objs):
+        col = spec[:, b]
+        peak = float(col.max())
+        if  props.per_band_level and peak > 1e-6:
+            col = col / peak
+        h = analysis.envelope(np.clip(col * props.master_gain, 0.0, 2.0),
+                              fps, props.attack_ms, props.release_ms)
+        baking.bake_curve(o, "scale", 2, frames,
+                          (0.02 + h * props.spec_height * props.size).astype(np.float32))

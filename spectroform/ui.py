@@ -97,6 +97,10 @@ class AUDIOGEO_PT_geometry(_Base, Panel):
             elif props.ripple_source == "EMITTER":
                 col.prop(props, "emitter_slots")
                 col.prop(props, "emitter_decay")
+                col.prop(props, "drum_response")
+            elif props.ripple_source == "HPSS":
+                col.prop(props, "ripple_components")
+                col.prop(props, "hpss_kernel")
             col.prop(props, "ripple_cycles")
             col.prop(props, "ripple_speed")
             col.prop(props, "ripple_beat_gain")
@@ -168,7 +172,13 @@ class AUDIOGEO_PT_motion(_Base, Panel):
         col.prop(props, "beat_lock")
         col.prop(props, "cycles_per_beat")
         col.prop(props, "loop_fade")
-        col.prop(props, "colour_by_timbre")
+        col.prop(props, "vertex_colour")
+
+        layout.separator()
+        col = layout.column(align=True)
+        col.prop(props, "mark_sections")
+        col.prop(props, "section_variation")
+        col.prop(props, "colour_source")
         col.prop(props, "add_camera")
         if props.add_camera:
             col.prop(props, "camera_orbit")
@@ -208,11 +218,35 @@ class AUDIOGEO_PT_presets(_Base, Panel):
                          text=key.replace("_", " ").title()).preset = key
 
 
+class AUDIOGEO_PT_render(_Base, Panel):
+    bl_label = "Render"
+    bl_parent_id = "AUDIOGEO_PT_main"
+    bl_options = {"DEFAULT_CLOSED"}
+
+    def draw(self, context):
+        layout = self.layout
+        props = context.scene.audiogeo
+        layout.use_property_split = True
+
+        col = layout.column(align=True)
+        col.prop(props, "render_preset")
+        col.prop(props, "render_path")
+
+        row = layout.row(align=True)
+        row.operator("audiogeo.render", text="Render", icon="RENDER_ANIMATION")
+        row.operator("audiogeo.render", text="Preview",
+                     icon="SEQ_PREVIEW").preview = True
+
+        if context.scene.camera is None:
+            layout.label(text="No camera: enable Add Camera Rig", icon="ERROR")
+
+
 classes = (
     AUDIOGEO_PT_main,
     AUDIOGEO_PT_frequency,
     AUDIOGEO_PT_geometry,
     AUDIOGEO_PT_motion,
     AUDIOGEO_PT_export,
-    AUDIOGEO_PT_presets
+    AUDIOGEO_PT_presets,
+    AUDIOGEO_PT_render,
 )

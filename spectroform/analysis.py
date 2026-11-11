@@ -1,12 +1,16 @@
 import math
+
+import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
 
 A4_HZ = 440.0
 A4_MIDI = 69
 NOTE_NAMES = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
 
-
-import numpy as np
+MAJOR_PROFILE = np.array([6.35, 2.23, 3.48, 2.33, 4.38, 4.09,
+                          2.52, 5.19, 2.39, 3.66, 2.29, 2.88])
+MINOR_PROFILE = np.array([6.33, 2.68, 3.52, 5.38, 2.60, 3.53,
+                          2.54, 4.75, 3.98, 2.69, 3.34, 3.17])
 
 def db_normalise(values, dynamic_range, top=None):
     db = 20.0 * np.log10(np.maximum(values, 1e-9))
@@ -199,3 +203,131 @@ def spectral_centroid(spec, bin_hz):
     c = (spec * lg[None, :]).sum(axis=1) / np.maximum(w, 1e-9)
     lo, hi = float(lg[0]), float(lg[-1])
     return np.clip((c - lo) / max(hi - lo, 1e-6), 0.0, 1.0).astype(np.float32)
+
+def _median_filter(x, size, axis):
+    size = max(1, int(size) | 1)
+    pad = size // 2
+    widths = [(pad, pad) if a == axis else (0, 0) for a in range(x.ndim)]
+    win = sliding_window_view(np.pad(x, widths, mode="edge"), size, axis=axis)
+    return np.median(win, axis=-1)
+
+
+def hpss(spec, kernel_time = 17, kernel_freq=17, power=2.0):
+    harm = _median_filter(spec, kernel_time, axis=0)
+    perc = _median_filter(spec, kernel_freq, axis=1)
+    hp, pp = harm ** power, perc ** power
+    total = hp + pp + 1e-9
+    return (spec * (hp / total)).astype(np.float32), \
+           (spec * (pp / total)).astype(np.float32)
+
+def onset_bands(spec, bin_hz, edges=(250.0, 4000.0)):
+    hz = np.asarray(bin_hz)
+    masks = (hz < edges[0],
+             (hz >= edges[0]) & (hz < edges[1]),
+             hz >= edges[1])
+    diff = np.maximum(np.diff(spec, axis=0, prepend=spec[:1]), 0.0)
+    out = []
+    for m in masks:
+        f = diff[:, m].sum(axis=1) if m.any() else np.zeros(spec.shape[0])
+        peak = float(f.max())
+        out.append((f / peak if peak > 0 else f).astype(np.float32))
+    return tuple(out)
+
+def classify_onsets(spec, bin_hz, onset, threshold=0.25):
+    """Label onset peaks by which band carries most of their flux.
+
+    Returns (frames, labels, shares). Prefer the shares: real drums overlap,
+    so a hard label throws away the fact that a frame is both kick and hat.
+    """
+    low, mid, high = onset_bands(spec, bin_hz)
+    n = min(len(onset), spec.shape[0])
+    peaks = [i for i in range(1, n - 1)
+             if onset[i] >= threshold
+             and onset[i] >= onset[i - 1] and onset[i] > onset[i + 1]]
+
+    labels, shares = [], []
+    for i in peaks:
+        v = np.array([low[i], mid[i], high[i]], dtype=np.float64)
+        total = v.sum()
+        sh = v / total if total > 1e-9 else np.zeros(3)
+        shares.append(sh)
+        labels.append(("KICK", "SNARE", "HAT")[int(np.argmax(sh))])
+    return (np.array(peaks, dtype=np.int32), labels,
+            np.array(shares, dtype=np.float32).reshape(-1, 3))
+
+
+def chroma(samples, rate, fps, fmin=110.0, fmax = 2000.0, win = 8192):
+    hop = max(1, int(round(rate / float(fps))))
+    win = int(win)
+    while win < hop * 2:
+        win *= 2
+    window = np.hanning(win).astype(np.float32)
+    freqs = np.fft.rfftfreq(win, 1.0 / rate)
+
+    resolvable = (rate /win) / 0.0578
+    keep = (freqs >= max(fmin, resolvable)) & (freqs <= fmax)
+    if not keep.any():
+        return np.zeros((2, 12), dtype=np.float32)
+    midi = 12.0 * np.log2(np.maximum(freqs[keep], 1e-6) / A4_HZ) + A4_MIDI
+    pc = np.rint(midi).astype(int) % 12
+
+    n_frames = max(2, int(math.ceil(samples.size / float(hop))))
+    padded = np.zeros(n_frames * hop + win, dtype=np.float32)
+    padded[: samples.size] = samples
+
+    out = np.zeros((n_frames, 12), dtype=np.float32)
+    for start in range(0, n_frames, 256):
+        end = min(start + 256, n_frames)
+        block = np.stack([padded[o: o + win]
+                          for o in np.arange(start, end) * hop]).astype(np.float32)
+        block *= window
+        mag = np.abs(np.fft.rfft(block, axis=1)).astype(np.float32)[:, keep]
+        for c in range(12):
+            sel = pc == c
+            if sel.any():
+                out[start:end, c] = mag[:, sel].sum(axis=1)
+    return (out / np.maximum(out.sum(axis=1, keepdims=True), 1e-9)).astype(np.float32)
+
+def detect_key(chroma_frames):
+    profile = chroma_frames.mean(axis=0)
+    profile -= profile.mean()
+    best = (-2.0, 0, True)
+    for tonic in range(12):
+        for major in (True,False):
+            ref = np.roll(MAJOR_PROFILE if major else MINOR_PROFILE, tonic)
+            ref = ref - ref.mean()
+            denom = np.linalg.norm(profile) * np.linalg.norm(ref)
+            score = float(profile @ ref / denom) if denom > 1e-9 else 0.0
+            if score > best[0]:
+                best = (score, tonic, major)
+
+    score, tonic, major = best
+    return tonic, major, "%s%s" % (NOTE_NAMES[tonic], "" if major else "m"), score
+
+def detect_sections(spec, fps, min_seconds=4.0, count=None):
+    n = spec.shape[0]
+    if n < 8:
+        return np.zeros(0, dtype=np.int32)
+    f = spec / np.maximum(np.linalg.norm(spec, axis=1, keepdims=True), 1e-9)
+    sim = f @ f.T
+
+    k = max(2, int(round(fps * min_seconds * 0.5)))
+    novelty = np.zeros(n, dtype=np.float64)
+    for i in range(k, n - k):
+        a = sim[i - k:i, i - k:i].mean()
+        b = sim[i:i + k, i:i + k].mean()
+        cross = sim[i - k:i, i:i + k].mean()
+        novelty[i] = (a + b) * 0.5 - cross
+    if novelty.max() > 0:
+        novelty /= novelty.max()
+    
+    gap = int(fps* min_seconds)
+    picks = []
+    for i in np.argsort(novelty)[::-1]:
+        if novelty[i] <= 0.2:
+            break
+        if all(abs(int(i) - p) >= gap for p in picks):
+            picks.append(int(i))
+        if count is not None and len(picks) >= count:
+            break
+    return np.array(sorted(picks), dtype=np.int32)

@@ -228,6 +228,8 @@ class AUDIOGEO_Props(PropertyGroup):
             ("SPECTRUM", "Spectrum", "One wave per frequency bin -- follows the track closely"),
             ("BANDS", "Three Bands", "One wave each for bass, mid and treble -- simpler, calmer"),
             ("EMITTER", "Beat Emitters", "Each detected beat launches its own ripple burst"),
+            ("HPSS", "Tonal / Percussive", "Long swells from sustained notes, "
+                                           "fine chop from transients"),
         ],
         default="SPECTRUM",
     )
@@ -409,6 +411,53 @@ class AUDIOGEO_Props(PropertyGroup):
         name="Camera Orbit",
         description="Full turns the camera makes over the whole track",
         default=0.25, min=-4.0, max=4.0,
+    )
+    hpss_kernel: IntProperty(
+        name="Separation Width",
+        description="Median window for tonal/percussive separation. Wider is "
+                    "cleaner but blurs short notes",
+        default=17, min=3, max=65,
+    )
+    colour_source: EnumProperty(
+        name="Colour From",
+        description="What drives the emission hue",
+        items=[
+            ("TIMBRE", "Timbre", "Brightness: blue when dark, red when bright"),
+            ("HARMONY", "Harmony", "The chord: hue follows the dominant pitch class"),
+            ("NONE", "None", "Leave the colour alone"),
+        ],
+        default="HARMONY",
+    )
+    drum_response: BoolProperty(
+        name="Split Drums",
+        description="Give kick, snare and hats their own emitter groups "
+                    "instead of one shared onset",
+        default = True, 
+    )
+    mark_sections: BoolProperty(
+        name="Mark Sections",
+        description="Add timeline markers where the track changes character",
+        default=True,
+    )
+    section_variation: FloatProperty(
+        name="Section Variation",
+        description="How much the wave height changes between sections",
+        default=0.35, min=0.0, max=1.0,
+    )
+    vertex_colour: BoolProperty(
+        name="Frequency Colours",
+        description="Bake a colour attribute mapping frequency to hue. "
+                    "Exports with the mesh",
+        default=False,
+    )
+    render_preset: EnumProperty(
+        name="Resolution",
+        items=[(k, k.replace("_", " ").title(), "") for k in
+               ("SQUARE_1080", "LANDSCAPE_1080", "VERTICAL_1080", "LANDSCAPE_4K")],
+        default="LANDSCAPE_1080",
+    )
+    render_path: StringProperty(
+        name="Output", subtype="FILE_PATH", default="//spectroform.mp4",
     )
 
 

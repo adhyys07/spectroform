@@ -322,3 +322,37 @@ def make_emitter_offsets(geo, props):
     k = 2.0 * np.pi * max(props.ripple_cycles, 0.01)
     amp = float(props.terrain_strength) * unit / np.sqrt(float(slots))
     return [wave_pair(geo, props, k, amp) for _ in range(slots)]
+
+def make_hpss_ripple_offsets(geo, props, n_components):
+    unit = max(props.size, 1e-4)
+    ratio = (np.linspace(0.0, 1.0, n_components, dtype=np.float32)
+             if n_components > 1 else np.zeros(1, dtype=np.float32))
+    tilt = np.interp(ratio, (0.0, 0.5, 1.0),
+                     (props.terrain_strength, props.wave_strength,
+                      props.spike_strength)).astype(np.float32)
+    weight = tilt / np.sqrt(float(n_components))
+
+    out = []
+    for i in range(n_components):
+        tonal = (i % 2 == 0)
+        scale = 0.5 if tonal else 3.0
+        k = 2.0 * np.pi * max(props.ripple_cycles * scale * (1.0 + ratio[1]), 0.01)
+        out.append(wave_pair(geo, props, k, unit * float(weight[i])))
+    return out
+
+def frequency_colours(geo,props, spec=None):
+    import colorsys
+
+    if "phase" in geo:
+        t = geo["phase"]
+    else:
+        y = geo["verts"][:, 1]
+        t = (y - y.min()) / max(float(y.max() - y.min()), 1e-6)
+    t = np.clip((t - t.min()) / max(float(t.max() - t.min()), 1e-6), 0.0, 1.0)
+
+    lut = np.array([colorsys.hsv_to_rgb(0.72 * (1.0 - u), 0.85, 1.0)
+                    for u in np.linspace(0.0, 1.0, 256)], dtype=np.float32)
+    idx = np.clip((t * 255.0).astype(int), 0, 255)
+    rgba = np.ones((t.size, 4), dtype=np.float32)
+    rgba[:, :3] = lut[idx]
+    return rgba

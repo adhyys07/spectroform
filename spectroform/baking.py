@@ -146,11 +146,6 @@ def audio_phase(base_speed, onset, beat_gain, fps):
 
 
 def ripple_phase(data, props, frames, base_speed, onset, fps):
-    """Phase for one wave: locked to detected beats, or free-running.
-
-    Beat Lock blends between the two, so 0 keeps the onset-surge behaviour
-    and 1 puts a crest exactly on every beat.
-    """
     beats = np.asarray(data.get("beats", ()), dtype=np.float64)
     if float(props.beat_lock) > 0.0 and beats.size >= 2:
         return beat_locked_phase(len(frames), beats - float(frames[0]), fps,
@@ -161,7 +156,6 @@ def ripple_phase(data, props, frames, base_speed, onset, fps):
 
 
 def loop_pair(amp, ph, props):
-    """Apply the loop crossfade to a wave's amplitude and phase."""
     fade = int(getattr(props, "loop_fade", 0))
     if fade >= 2:
         amp = make_loopable(amp, fade)
@@ -257,12 +251,6 @@ def beat_locked_phase(n_frames, beats, fps, free_speed,cycles_per_beat = 1.0, lo
     return ((1.0 - w) * free + w * locked).astype(np.float32)
 
 def make_loopable(values, fade_frames, wrap=False):
-    """Ramp the tail so the last frame lands on the first -- a clean loop.
-
-    A plain crossfade to the head is wrong here: it ends on values[fade-1],
-    not values[0], which leaves the seam open. Correcting by a ramped offset
-    guarantees out[-1] == out[0] and keeps the shape of the curve.
-    """
     v = np.asarray(values, dtype=np.float64).copy()
     n = v.size
     f = int(min(fade_frames, n))
@@ -307,3 +295,80 @@ def bake_emitters(obj, data, props, frames, beats):
                    (-amp * np.sin(ph)).astype(np.float32))
 
     return bake_object_motion(obj, data, props, frames)
+
+def bake_drum_emitter(obj,data,props,frames,spec,bin_hz):
+    from .constants import SK_RIPPLE_COS, SK_RIPPLE_SIN
+
+    key = obj.data.shape_keys
+    fps = float(props.bake_fps)
+    n = len(frames)
+    bands = analysis.onset_bands(spec, bin_hz)
+    slots = max(3, int(props.emitter_slots))
+    decay = max(float(props.emitter_decay), 0.05)
+    t = np.arange(n, dtype=np.float64) / fps
+
+    for s in range(slots):
+        band = bands[s % 3][:n]
+
+        tau = decay * (1.0, 0.6, 0.3)[s % 3]
+        amp = analysis.envelope(band.astype(np.float32), fps, 5.0, tau * 1000.0)
+        speed = props.ripple_speed * (1.0, 1.7, 2.8)[s % 3]
+        ph = (2.0 * np.pi * speed * t).astype(np.float32)
+        amp, ph = loop_pair(amp, ph, props)
+        bake_curve(key, 'key_blocks["%s"].value' % (SK_RIPPLE_SIN % s), -1, frames,
+                   (amp * np.cos(ph)).astype(np.float32))
+        bake_curve(key, 'key_blocks["%s"].value' % (SK_RIPPLE_COS % s), -1, frames,
+                   (-amp * np.sin(ph)).astype(np.float32))
+
+    return bake_object_motion(obj, data, props, frames)
+
+
+def section_gain(n_frames, bounds, variation, seed=0):
+    gain = np.ones(n_frames, dtype=np.float32)
+    if variation <= 0.0 or len(bounds) == 0:
+        return gain
+    rng = np.random.RandomState(int(seed))
+    edges = [0] + [int(b) for b in bounds] + [n_frames]
+    for i in range(len(edges) - 1):
+        level = 1.0 + float(variation) * rng.uniform(-1.0, 1.0)
+        gain[edges[i]:edges[i + 1]] = level
+    k = max(3, n_frames // 120) | 1
+    pad = np.pad(gain, k // 2, mode="edge")
+    return np.convolve(pad, np.ones(k) / k, mode="valid").astype(np.float32)
+
+def harmony_hue(chroma_frames):
+    dominant = np.argmax(chroma_frames, axis=1)
+    confidence = chroma_frames.max(axis=1)
+    hue = (dominant.astype(np.float32) / 12.0)
+    # Desaturate where no pitch class really dominates.
+    sat = np.clip((confidence - 0.12) * 4.0, 0.15, 0.95)
+    return hue, sat
+
+
+def bake_drum_emitters(obj, props, frames, spec, bin_hz):
+    """Three emitter families: kick, snare and hats each drive their own slots."""
+    from .constants import SK_RIPPLE_COS, SK_RIPPLE_SIN
+
+    key = obj.data.shape_keys
+    fps = float(props.bake_fps)
+    n = len(frames)
+    bands = analysis.onset_bands(spec, bin_hz)
+    slots = max(3, int(props.emitter_slots))
+    decay = max(float(props.emitter_decay), 0.05)
+    t = np.arange(n, dtype=np.float64) / fps
+
+    for s in range(slots):
+        which = s % 3
+        band = np.asarray(bands[which], dtype=np.float32)[:n]
+        if band.size < n:
+            band = np.pad(band, (0, n - band.size))
+        # Hats flick, kicks swell: shorter release for the higher bands.
+        tau = decay * (1.0, 0.6, 0.3)[which]
+        amp = analysis.envelope(band, fps, 5.0, tau * 1000.0)
+        speed = props.ripple_speed * (1.0, 1.7, 2.8)[which]
+        ph = (2.0 * np.pi * speed * t).astype(np.float32)
+        amp, ph = loop_pair(amp, ph, props)
+        bake_curve(key, 'key_blocks["%s"].value' % (SK_RIPPLE_SIN % s), -1, frames,
+                   (amp * np.cos(ph)).astype(np.float32))
+        bake_curve(key, 'key_blocks["%s"].value' % (SK_RIPPLE_COS % s), -1, frames,
+                   (-amp * np.sin(ph)).astype(np.float32))

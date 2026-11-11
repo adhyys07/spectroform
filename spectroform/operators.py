@@ -67,7 +67,7 @@ class AUDIOGEO_OT_generate(Operator):
                     bins=props.spectrum_bins,
                     dynamic_range=props.dynamic_range,
                 )
-            elif kind in RIPPLE_MODES and props.ripple_source in {"SPECTRUM", "EMITTER"}:
+            elif kind in RIPPLE_MODES and props.ripple_source in {"SPECTRUM", "EMITTER", "HPSS"}:
                 if props.use_stereo and props.ripple_source == "SPECTRUM":
                     spec_l = analysis.spectrogram(
                         left, rate, props.bake_fps,
@@ -85,6 +85,17 @@ class AUDIOGEO_OT_generate(Operator):
                         bins=props.ripple_components,
                         dynamic_range=props.dynamic_range,
                     )
+
+            if spec is not None:
+                bin_hz = analysis.bin_frequencies(spec.shape[1])
+                data["sections"] = analysis.detect_sections(
+                    spec, props.bake_fps, min_seconds=4.0)
+                if props.section_variation > 0.0:
+                    data["section_gain"] = baking.section_gain(
+                        n_frames, data["sections"], props.section_variation,
+                        seed=props.seed)
+            else:
+                bin_hz = None
 
             if kind == "SPECTROGRAM":
                 geo = waveform.build_spectrogram(
@@ -115,12 +126,31 @@ class AUDIOGEO_OT_generate(Operator):
 
             wm.progress_update(65)
             if kind in RIPPLE_MODES:
-                if props.ripple_source == "EMITTER":
+                if props.ripple_source == "HPSS":
+                    harm, perc = analysis.hpss(
+                        spec, props.hpss_kernel, props.hpss_kernel)
+                    # Alternate tonal/percussive, matching the builder's
+                    # alternating wavelengths.
+                    spec = harm.copy()
+                    spec[:, 1::2] = perc[:, 1::2]
+                    pairs = waveform.make_hpss_ripple_offsets(
+                        geo, props, spec.shape[1])
+                    scene_build.add_ripple_shape_keys(obj, pairs)
+                    wm.progress_update(80)
+                    baked = baking.bake_spectral_ripple(
+                        obj, spec, data, props, frames)
+                elif props.ripple_source == "EMITTER":
                     pairs = waveform.make_emitter_offsets(geo, props)
                     scene_build.add_ripple_shape_keys(obj, pairs)
                     wm.progress_update(80)
-                    baked = baking.bake_emitters(
-                        obj, data, props, frames, data["beats"])
+                    if props.drum_response and spec is not None:
+                        baking.bake_drum_emitters(
+                            obj, props, frames, spec, bin_hz)
+                        baked = baking.bake_object_motion(
+                            obj, data, props, frames)
+                    else:
+                        baked = baking.bake_emitters(
+                            obj, data, props, frames, data["beats"])
                 elif props.ripple_source == "SPECTRUM":
                     pairs = waveform.make_spectral_ripple_offsets(
                         geo, props, spec.shape[1], stereo=props.use_stereo)
@@ -166,12 +196,30 @@ class AUDIOGEO_OT_generate(Operator):
                     )
                 scene_build.setup_material(obj, frames, energy)
 
-                if props.colour_by_timbre and spec is not None:
-                    hz = analysis.bin_frequencies(spec.shape[1])
-                    centroid = analysis.spectral_centroid(spec, hz)
+                mat = bpy.data.materials.get(MAT_NAME)
+                if mat is not None and props.colour_source == "HARMONY":
+                    chroma = analysis.chroma(samples, rate, props.bake_fps)
+                    _t, _maj, key_name, _c = analysis.detect_key(chroma)
+                    data["key"] = key_name
+                    hue, sat = baking.harmony_hue(chroma[:n_frames])
+                    if hue.size >= n_frames:
+                        scene_build.bake_emission_hue(
+                            mat, frames, hue[:n_frames], sat[:n_frames])
+                elif mat is not None and props.colour_source == "TIMBRE"                         and spec is not None:
+                    centroid = analysis.spectral_centroid(spec, bin_hz)
+                    scene_build.bake_emission_hue(mat, frames, centroid)
+
+            if props.vertex_colour:
+                rgba = waveform.frequency_colours(geo, props, spec)
+                attr = scene_build.add_colour_attribute(obj, rgba)
+                if attr is not None and props.create_material:
                     mat = bpy.data.materials.get(MAT_NAME)
                     if mat is not None:
-                        scene_build.bake_emission_hue(mat, frames, centroid)
+                        scene_build.wire_colour_into_material(mat)
+
+            if props.mark_sections and len(data.get("sections", ())):
+                scene_build.add_section_markers(
+                    scene, data["sections"], props.frame_start)
 
             if props.add_camera:
                 scene_build.add_camera_rig(context, obj, frames, props)
@@ -197,6 +245,10 @@ class AUDIOGEO_OT_generate(Operator):
         )
         if data.get("bpm", 0.0) > 0.0:
             msg += " | %.0f BPM, %d beats" % (data["bpm"], len(data["beats"]))
+        if data.get("key"):
+            msg += ", key %s" % data["key"]
+        if len(data.get("sections", ())):
+            msg += ", %d sections" % len(data["sections"])
         props.last_report = msg
         self.report({"INFO"}, msg)
         return {"FINISHED"}

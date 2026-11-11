@@ -9,8 +9,6 @@ bl_info = {
     "category": "Object",
 }
 
-# Reload-safe imports: on "Reload Scripts" the package globals survive, so the
-# presence of `bpy` tells us this is a re-run rather than a cold import.
 if "bpy" in locals():
     import importlib
 
@@ -24,6 +22,7 @@ if "bpy" in locals():
         waveform,
         properties,    
         presets,
+        render,
         operators,     
         ui,            
     ):
@@ -38,6 +37,7 @@ else:
         operators,
         presets,
         properties,
+        render,
         scene_build,
         ui,
         waveform,
@@ -49,7 +49,7 @@ from bpy.props import PointerProperty
 from .constants import MIN_BLENDER
 
 CLASSES = (properties.classes + operators.classes
-           + presets.classes + ui.classes)
+           + presets.classes + render.classes + ui.classes)
 
 
 def register():
