@@ -783,7 +783,9 @@ class AUDIOGEO_Props(PropertyGroup):
     )
     live_device: EnumProperty(
         name="Input Device", items=lambda s, c: liveinput.device_list() or
-        [("", "No input devices", "")],
+        # An empty identifier is not a valid enum item, and Blender warns
+        # about it on every file load when no device is found.
+        [("NONE", "No input devices", "")],
         description="Microphone, or a loopback device to capture what is playing")
     live_rate: IntProperty(name="Sample Rate", default=44100, min=8000, max=192000)
     live_smoothing: FloatProperty(

@@ -2,7 +2,7 @@ schema_version = "1.0.0"
 
 # The id must be a valid Python module name and must match the folder name,
 # because Blender imports the extension as bl_ext.<repo>.<id>
-id = "spectroformI"
+id = "spectroform"
 version = "1.0.0"
 name = "Spectroform"
 tagline = "Audio-reactive 3D geometry with baked keyframe animation"

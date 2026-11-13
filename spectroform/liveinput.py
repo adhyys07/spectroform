@@ -97,7 +97,7 @@ def device_list(force=False):
 def device_default(props):
     """(index or None, rate, channels) for the chosen device."""
     index = None
-    if props.live_device:
+    if props.live_device and props.live_device != "NONE":
         try:
             index = int(props.live_device)
         except ValueError:
