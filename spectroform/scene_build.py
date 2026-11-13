@@ -277,23 +277,64 @@ def bake_bar_objects(objs, spec, props, frames):
         baking.bake_curve(o, "scale", 2, frames,
                           (0.02 + h * props.spec_height * props.size).astype(np.float32))
 
+def _compositor(scene):
+    """(tree, source socket, destination socket) for the scene compositor.
+
+    Blender 5.0 replaced scene.node_tree with a compositing node *group*,
+    fed by a Group Input instead of a Render Layers node, so the two have
+    to be found differently.
+    """
+    if hasattr(scene, "compositing_node_group"):          # 5.0+
+        tree = scene.compositing_node_group
+        if tree is None:
+            tree = bpy.data.node_groups.new("Compositing", "CompositorNodeTree")
+            tree.interface.new_socket(
+                "Image", in_out="INPUT", socket_type="NodeSocketColor")
+            tree.interface.new_socket(
+                "Image", in_out="OUTPUT", socket_type="NodeSocketColor")
+            tree.nodes.new("NodeGroupInput")
+            tree.nodes.new("NodeGroupOutput")
+            scene.compositing_node_group = tree
+        source = next((n for n in tree.nodes if n.type == "GROUP_INPUT"), None)
+        dest = next((n for n in tree.nodes if n.type == "GROUP_OUTPUT"), None)
+    else:                                                  # 3.6 - 4.x
+        scene.use_nodes = True
+        tree = scene.node_tree
+        source = next((n for n in tree.nodes if n.type == "R_LAYERS"), None)
+        dest = next((n for n in tree.nodes if n.type == "COMPOSITE"), None)
+    return tree, source, dest
+
+
+def _glare_settings(glare, threshold, size, mix):
+    """Glare is configured by node properties up to 4.x and by input
+    sockets from 5.0, where the menus take their display names."""
+    if hasattr(glare, "glare_type"):
+        glare.glare_type = "FOG_GLOW"
+        if "quality" in glare.bl_rna.properties:
+            glare.quality = "HIGH"
+        glare.threshold = threshold
+        glare.size = size
+        glare.mix = mix
+        return
+
+    values = (("Type", "Fog Glow"), ("Quality", "High"),
+              ("Threshold", threshold), ("Size", size))
+    for name, value in values:
+        socket = glare.inputs.get(name)
+        if socket is not None:
+            socket.default_value = value
+
+
 def setup_glare(scene, threshold=1.0, size=8, mix=0.0):
-    scene.use_nodes = True
-    tree = scene.node_tree
+    tree, source, dest = _compositor(scene)
     glare = next((n for n in tree.nodes if n.type == "GLARE"), None)
     if glare is None:
         glare = tree.nodes.new("CompositorNodeGlare")
-    glare.glare_type = "FOG_GLOW"
-    glare.quality = "HIGH"
-    glare.threshold = threshold
-    glare.size = size
-    glare.mix = mix
+    _glare_settings(glare, threshold, size, mix)
 
-    layers = next((n for n in tree.nodes if n.type == "R_LAYERS"), None)
-    composite = next((n for n in tree.nodes if n.type == "COMPOSITE"), None)
-    if layers and composite:
-        tree.links.new(layers.outputs["Image"], glare.inputs["Image"])
-        tree.links.new(glare.outputs["Image"], composite.inputs["Image"])
+    if source is not None and dest is not None:
+        tree.links.new(source.outputs["Image"], glare.inputs["Image"])
+        tree.links.new(glare.outputs["Image"], dest.inputs["Image"])
     return glare
 
 

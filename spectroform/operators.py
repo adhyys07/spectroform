@@ -134,6 +134,10 @@ class AUDIOGEO_OT_generate(Operator):
                 data["bpm"] = 60.0e6 / float(tempo)
 
             if spec is not None:
+                # Before detect_downbeat, which weighs the bass bins and so
+                # needs to know which frequency each one stands for.
+                bin_hz = analysis.bin_frequencies(spec.shape[1])
+                phase = 0
                 if props.use_bars:
                     phase = analysis.detect_downbeat(
                         spec, bin_hz, data["beats"], props.beats_per_bar,
@@ -141,7 +145,6 @@ class AUDIOGEO_OT_generate(Operator):
                 data["downbeat_phase"] = phase
                 data["bars"] = analysis.bar_frames(data["beats"], props.beats_per_bar, phase)
                 data["phrases"] = analysis.phrase_frames(data["bars"], props.bars_per_phrase)
-                bin_hz = analysis.bin_frequencies(spec.shape[1])
                 data["sections"] = analysis.detect_sections(
                     spec, props.bake_fps, min_seconds=4.0)
                 if props.section_variation > 0.0:
@@ -467,8 +470,13 @@ class AUDIOGEO_OT_generate(Operator):
 
             if props.use_glare and props.create_material:
                 # EEVEE has no bloom toggle any more; without this the
-                # emission is bright but does not glow.
-                scene_build.setup_glare(scene, props.glare_threshold)
+                # emission is bright but does not glow. Optional, so a
+                # compositor that will not play along costs the glow and
+                # not the bake.
+                try:
+                    scene_build.setup_glare(scene, props.glare_threshold)
+                except Exception as exc:
+                    self.report({"WARNING"}, "Glare skipped: %s" % exc)
 
             if props.light_rig:
                 scene_build.add_light_rig(context, props, frames, (

@@ -3,6 +3,11 @@ import numpy as np
 
 GRAVITY = 9.81
 
+# numpy 2.0 renamed trapz to trapezoid and dropped the old name. Blender
+# bundles its own numpy, which is not always the one the tests run against,
+# so take whichever exists.
+_trapezoid = getattr(np, "trapezoid", None) or np.trapz
+
 def dispersion_speeds(cycles, size, gravity=GRAVITY, scale=1.0):
     k = 2.0 * np.pi * np.asarray(cycles, dtype=np.float64) / max(size, 1e-6)
     omega = np.sqrt(gravity * np.maximum(k, 1e-9))
@@ -30,7 +35,7 @@ def bessel_j(n, x, steps=256):
     x = np.asarray(x, dtype=np.float64)
     tau = np.linspace(0.0, np.pi, steps)
     integrand = np.cos(n * tau[None, :] - x.ravel()[:, None] * np.sin(tau)[None, :])
-    return (np.trapezoid(integrand, tau, axis=1) / np.pi).reshape(x.shape)
+    return (_trapezoid(integrand, tau, axis=1) / np.pi).reshape(x.shape)
 
 def bessel_zeros(n, count, search_to=80.0, steps=20000):
     xs = np.linspace(1e-6, search_to, steps)
