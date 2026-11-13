@@ -13,6 +13,8 @@ from bpy.types import PropertyGroup
 # The PropertyGroups these CollectionProperties point at. Both modules must
 # register before this one, or the pointer types do not exist yet.
 from . import modmatrix, sections
+# live_device's items callback asks it which input devices exist.
+from . import liveinput
 
 # sine_field() offsets the spike seed by 977, so keep headroom below 2**31.
 _SEED_MAX = 2 ** 31 - 1000
@@ -22,9 +24,50 @@ class AUDIOGEO_Props(PropertyGroup):
     # --- source ---------------------------------------------------------
     audio_path: StringProperty(
         name="Audio File",
-        description="WAV, MP3, FLAC, OGG, AIFF or M4A file to analyse",
+        description="Audio or video file to analyse. The audio track of a "
+                    "video is read directly, with no separate extraction",
         subtype="FILE_PATH",
         default="",
+    )
+
+    # --- source from a link ---------------------------------------------
+    source_mode: EnumProperty(
+        name="Source",
+        description="Where the audio comes from",
+        items=[
+            ("FILE", "Local File", "A file already on this machine"),
+            ("URL", "Link", "Download audio or video from a link, then "
+                            "analyse the downloaded file"),
+        ],
+        default="FILE",
+    )
+    media_url: StringProperty(
+        name="Link",
+        description="Direct http(s) link to an audio or video file. A link to "
+                    "a page needs yt-dlp installed. Make sure you have the "
+                    "right to use what you download",
+        default="",
+    )
+    fetch_folder: StringProperty(
+        name="Cache Folder",
+        description="Where downloads are kept. Re-using a link reads this "
+                    "folder instead of downloading again",
+        subtype="DIR_PATH", default="//downloads/",
+    )
+    fetch_max_mb: IntProperty(
+        name="Size Limit",
+        description="Refuse a download larger than this, in megabytes",
+        default=100, min=1, max=4096, soft_max=500,
+    )
+    fetch_force: BoolProperty(
+        name="Download Again",
+        description="Ignore the cached copy and fetch the link afresh",
+        default=False,
+    )
+    fetch_auto_generate: BoolProperty(
+        name="Generate After Fetching",
+        description="Run Generate as soon as the download finishes",
+        default=True,
     )
     bake_fps: IntProperty(
         name="Bake FPS",
@@ -747,7 +790,55 @@ class AUDIOGEO_Props(PropertyGroup):
         name="Smoothing", default=0.6, min=0.0, max=0.99,
         description="How much of the previous value carries over. Low is "
                     "twitchy, high is laggy")
+    live_gain: FloatProperty(
+        name="Input Gain", default=1.0, min=0.0, max=8.0, soft_max=4.0,
+        description="Boost a quiet microphone before it is measured. Levels "
+                    "are normalised after this, so it mostly decides how "
+                    "easily the gate opens")
+    live_gate_db: FloatProperty(
+        name="Noise Gate", default=-45.0, min=-90.0, max=-6.0,
+        description="Input below this level (dB) is treated as silence, so "
+                    "room noise does not keep the surface simmering")
+    live_fps: IntProperty(
+        name="Update Rate", default=60, min=10, max=144,
+        description="Viewport updates per second while live. Drop it if the "
+                    "scene is heavy")
+    live_record: BoolProperty(
+        name="Record", default=True,
+        description="Write the captured audio to a WAV, so the take can be "
+                    "baked to keyframes and rendered afterwards")
+    live_record_path: StringProperty(
+        name="Record To", subtype="FILE_PATH", default="//",
+        description="File for the recording, or a folder to put a "
+                    "timestamped take in. Unsaved blend files use the temp "
+                    "folder")
+    live_record_max: IntProperty(
+        name="Max Length", default=300, min=5, max=3600,
+        description="Seconds before recording stops on its own, because the "
+                    "take is held in memory: about 10 MB a minute")
+    live_auto_bake: BoolProperty(
+        name="Bake When Stopped", default=False,
+        description="Run Generate & Bake on the recording as soon as the "
+                    "stream stops, instead of waiting for the button")
 
+    orchestra_count: IntProperty(name="Members", default=16, min=2, max=128,
+        soft_max=48, description="Copies of the result, each with its own slice "
+                                 "of the audio")
+    orchestra_layout: EnumProperty(name="Arrangement",
+        items=[("RING", "Ring", "A circle, each facing outward"),
+               ("GRID", "Grid", "Rows and columns"),
+               ("LINE", "Line", "A single row along X"),
+               ("CURVE", "Along Curve", "Spaced along a curve object")],
+        default="RING")
+    orchestra_curve: PointerProperty(name="Curve", type=bpy.types.Object,
+        poll=lambda self, obj: obj.type == "CURVE")
+    orchestra_drive: EnumProperty(name="Each Driven By",
+        items=[("BIN", "Frequency Bin", "One band each, across the spectrum"),
+               ("STEM", "Stem", "Cycle through the separated stems"),
+               ("TRANSFORM", "Transform Only", "Scale and height only, so all "
+                                               "members share one mesh")],
+        default="BIN")
+    orchestra_hide_source: BoolProperty(name="Hide Original", default=True)
 
 
 

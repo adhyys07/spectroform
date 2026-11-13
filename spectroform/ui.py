@@ -1,6 +1,9 @@
+import os
+
+import bpy
 from bpy.types import Panel
 
-from .constants import RIPPLE_MODES, SPECTRAL_BARS, SPECTRAL_STATIC
+from .constants import OBJ_NAME, RIPPLE_MODES, SPECTRAL_BARS, SPECTRAL_STATIC
 
 
 class _Base:
@@ -17,8 +20,41 @@ class AUDIOGEO_PT_main(_Base, Panel):
         layout = self.layout
         props = context.scene.audiogeo
 
+        layout.row(align=True).prop(props, "source_mode", expand=True)
+
         col = layout.column(align=True)
-        col.prop(props, "audio_path", text="")
+        if props.source_mode == "URL":
+            from . import fetch
+
+            col.prop(props, "media_url", text="", icon="URL")
+            if fetch.PROGRESS["active"]:
+                col.label(text=props.last_report or "Downloading...",
+                          icon="SORTTIME")
+                col.label(text="Esc cancels", icon="INFO")
+            else:
+                row = col.row(align=True)
+                row.operator("audiogeo.fetch", icon="IMPORT")
+                row.prop(props, "fetch_force", text="", icon="FILE_REFRESH")
+                url = props.media_url.strip()
+                if url and not fetch.is_url(url):
+                    col.label(text="Needs an http or https link", icon="ERROR")
+                elif url and not fetch.looks_like_media_file(url):
+                    # A page link needs the extractor; say so before they wait
+                    # for a failed download.
+                    if fetch.ytdlp_available():
+                        col.label(text="Page link: yt-dlp will extract the "
+                                       "audio", icon="INFO")
+                    else:
+                        box = col.box()
+                        box.label(text="Page link needs yt-dlp", icon="ERROR")
+                        box.operator("audiogeo.install_fetch_deps",
+                                     icon="IMPORT")
+            if props.audio_path:
+                col.label(text="Using: %s" % props.audio_path.rsplit("/", 1)[-1],
+                          icon="CHECKMARK")
+        else:
+            col.prop(props, "audio_path", text="")
+
         row = col.row(align=True)
         row.prop(props, "bake_fps")
         row.prop(props, "frame_start")
@@ -409,6 +445,17 @@ class AUDIOGEO_PT_extra(_Base, Panel):
 
         layout.separator()
         box = layout.box()
+        box.label(text="Downloads", icon="URL")
+        c = box.column(align=True)
+        c.prop(props, "fetch_folder")
+        c.prop(props, "fetch_max_mb")
+        c.prop(props, "fetch_auto_generate")
+        c.operator("audiogeo.fetch_clear_cache", icon="TRASH")
+        c.label(text="You must have the right to use what you download",
+                icon="INFO")
+
+        layout.separator()
+        box = layout.box()
         box.label(text="WebGL Page", icon="WORLD")
         c = box.column(align=True)
         c.prop(props, "web_export_path")
@@ -576,6 +623,70 @@ class AUDIOGEO_PT_arrangement(_Base, Panel):
                       icon="INFO")
 
 
+class AUDIOGEO_PT_live(_Base, Panel):
+    bl_label = "Live Input"
+    bl_parent_id = "AUDIOGEO_PT_main"
+    bl_options = {"DEFAULT_CLOSED"}
+
+    def draw(self, context):
+        from . import liveinput
+
+        layout = self.layout
+        props = context.scene.audiogeo
+        layout.use_property_split = True
+
+        if not liveinput.available():
+            box = layout.box()
+            col = box.column(align=True)
+            col.label(text="Needs the 'sounddevice' module", icon="ERROR")
+            col.label(text="pip install sounddevice, in Blender's Python")
+            return
+
+        running = liveinput.ACTIVE[0] is not None
+        obj = bpy.data.objects.get(OBJ_NAME)
+        if obj is None or obj.data.shape_keys is None:
+            layout.label(text="Generate the object first", icon="INFO")
+
+        col = layout.column(align=True)
+        col.enabled = not running
+        col.prop(props, "live_device", text="Device")
+        col.prop(props, "live_rate")
+        col.prop(props, "live_fps")
+
+        col = layout.column(align=True)
+        col.prop(props, "live_gain")
+        col.prop(props, "live_gate_db")
+        col.prop(props, "live_smoothing")
+
+        layout.separator()
+        col = layout.column(align=True)
+        col.enabled = not running
+        col.prop(props, "live_record")
+        sub = col.column(align=True)
+        sub.enabled = props.live_record
+        sub.prop(props, "live_record_path")
+        sub.prop(props, "live_record_max")
+        sub.prop(props, "live_auto_bake")
+
+        layout.separator()
+        row = layout.row(align=True)
+        if running:
+            row.operator("audiogeo.live_stop", icon="PAUSE", text="Stop")
+            layout.label(text=liveinput.status_line(), icon="REC")
+            # Playback re-evaluates the baked F-curves every frame, which
+            # overwrites whatever the live stream just wrote.
+            layout.label(text="Stop playback to see it", icon="INFO")
+        else:
+            row.operator("audiogeo.live", icon="PLAY", text="Start Live Input")
+
+        take = liveinput.LAST_TAKE
+        if take["path"] and not running:
+            box = layout.box()
+            box.label(text="%s (%.1f s)" % (os.path.basename(take["path"]),
+                                            take["seconds"]), icon="FILE_SOUND")
+            box.operator("audiogeo.live_bake", icon="RENDER_ANIMATION")
+
+
 classes = (
     AUDIOGEO_PT_main,
     AUDIOGEO_PT_frequency,
@@ -588,6 +699,7 @@ classes = (
     AUDIOGEO_PT_arrangement,
     AUDIOGEO_PT_lighting,
     AUDIOGEO_PT_extra,
+    AUDIOGEO_PT_live,
     AUDIOGEO_PT_export,
     AUDIOGEO_PT_presets,
     AUDIOGEO_PT_render,

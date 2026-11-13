@@ -1,7 +1,8 @@
 import os
 import bpy
 import numpy as np
-from .constants import SUPPORTED_EXTENSIONS
+from .constants import (AUDIO_EXTENSIONS, SUPPORTED_EXTENSIONS,
+                        VIDEO_EXTENSIONS)
 
 try:
     import aud
@@ -22,7 +23,10 @@ def _decode(filepath):
 
     ext = os.path.splitext(path)[1].lower()
     if ext not in SUPPORTED_EXTENSIONS:
-        raise RuntimeError("Unsupported file type '%s' (use WAV or MP3)." % ext)
+        raise RuntimeError(
+            "Unsupported file type '%s'. Audio: %s. Video: %s."
+            % (ext, ", ".join(sorted(AUDIO_EXTENSIONS)),
+               ", ".join(sorted(VIDEO_EXTENSIONS))))
 
     try:
         snd = aud.Sound.file(path)

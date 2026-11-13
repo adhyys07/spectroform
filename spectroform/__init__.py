@@ -15,6 +15,7 @@ if "bpy" in locals():
     for _mod in (
         constants,
         audio_io,
+        fetch,
         cache,
         analysis,
         physics,
@@ -29,6 +30,7 @@ if "bpy" in locals():
         geonodes,
         stamp,
         meshinput,
+        liveinput,
         modmatrix,
         sections,
         properties,
@@ -51,8 +53,10 @@ else:
         cache,
         constants,
         dataexport,
+        fetch,
         geometry,
         geonodes,
+        liveinput,
         looping,
         lyrics,
         meshinput,
@@ -83,7 +87,8 @@ from .constants import MIN_BLENDER
 CLASSES = (modmatrix.classes + sections.classes
            + properties.classes + operators.classes + preview.classes
            + presets.classes + render.classes + batch.classes
-           + dataexport.classes + looping.classes + ui.classes)
+           + dataexport.classes + looping.classes + fetch.classes
+           + liveinput.classes + ui.classes)
 
 
 def register():
@@ -103,6 +108,9 @@ def unregister():
     # The frame_change handler holds a reference into this module, so it
     # keeps firing after an unregister unless it is removed explicitly.
     preview.unregister_handler()
+    # An open input stream outlives the operator that opened it, and
+    # nothing would ever close it once that class is gone.
+    liveinput.stop_stream()
 
     if hasattr(bpy.types.Scene, "audiogeo"):
         del bpy.types.Scene.audiogeo

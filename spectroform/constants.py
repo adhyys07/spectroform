@@ -8,7 +8,12 @@ SK_BASS = "BASS_Terrain"
 SK_MID = "MID_Wave"
 SK_TREBLE = "TREBLE_Spikes"
  
-SUPPORTED_EXTENSIONS = {".wav", ".mp3", ".flac", ".ogg", ".aif", ".aiff", ".m4a"}
+AUDIO_EXTENSIONS = {".wav", ".mp3", ".flac", ".ogg", ".opus", ".aif", ".aiff",
+                    ".m4a"}
+# Blender bundles ffmpeg, so aud decodes the audio track straight out of a
+# video container -- no separate extraction step is needed.
+VIDEO_EXTENSIONS = {".mp4", ".m4v", ".webm", ".mkv", ".mov", ".avi"}
+SUPPORTED_EXTENSIONS = AUDIO_EXTENSIONS | VIDEO_EXTENSIONS
 
 MIN_BLENDER = (3, 6, 0)
 
