@@ -74,11 +74,39 @@ class AUDIOGEO_PT_geometry(_Base, Panel):
         layout.use_property_split = True
 
         kind = props.geometry_type
+
+        # E17: deform an existing object instead of a generated primitive.
+        box = layout.box()
+        box.prop(props, "mesh_source", text="")
+        if props.mesh_source == "CUSTOM":
+            c = box.column(align=True)
+            c.prop(props, "custom_mesh")
+            c.prop(props, "custom_apply_mods")
+            c.prop(props, "custom_auto_size")
+            if props.custom_mesh is None:
+                c.label(text="Pick a mesh to deform", icon="ERROR")
+            else:
+                c.label(text="The original is left untouched", icon="INFO")
+
         col = layout.column(align=True)
-        col.prop(props, "geometry_type")
+        if props.mesh_source == "CUSTOM":
+            # geometry_type still selects which deformer runs, but the base
+            # mesh no longer comes from it.
+            col.prop(props, "geometry_type", text="Deformer")
+        else:
+            col.prop(props, "geometry_type")
         col.prop(props, "size")
         col.prop(props, "base_scale")
         col.prop(props, "shade_smooth")
+
+        if kind == "VECTORSCOPE":
+            col.prop(props, "scope_rotate")
+            col.prop(props, "scope_spiral")
+            col.prop(props, "tube_radius")
+            col.prop(props, "tube_segments")
+            if not props.use_stereo:
+                col.label(text="Needs Stereo Split in the main panel",
+                          icon="ERROR")
 
         if kind == "RIPPLE":
             col.prop(props, "resolution")
@@ -228,6 +256,17 @@ class AUDIOGEO_PT_export(_Base, Panel):
         col.prop(props, "export_selected_only")
         layout.operator("audiogeo.export", icon="EXPORT")
 
+        layout.separator()
+        box = layout.box()
+        box.label(text="Analysis Data", icon="GRAPH")
+        c = box.column(align=True)
+        c.prop(props, "data_export_format")
+        c.prop(props, "data_export_path")
+        c.prop(props, "data_include_spectrogram")
+        c.prop(props, "data_include_chroma")
+        c.prop(props, "data_minify")
+        c.operator("audiogeo.export_data", icon="EXPORT")
+
 class AUDIOGEO_PT_presets(_Base, Panel):
     bl_label = "Presets"
     bl_parent_id = "AUDIOGEO_PT_main"
@@ -268,6 +307,18 @@ class AUDIOGEO_PT_render(_Base, Panel):
 
         if context.scene.camera is None:
             layout.label(text="No camera: enable Add Camera Rig", icon="ERROR")
+
+        layout.separator()
+        box = layout.box()
+        box.label(text="VJ Loop", icon="FILE_REFRESH")
+        c = box.column(align=True)
+        c.prop(props, "loop_bars")
+        c.prop(props, "loop_pick")
+        c.operator("audiogeo.make_loop", icon="TRIA_RIGHT_BAR")
+        if props.loop_fade > 0:
+            # The two mechanisms fight: a crossfade over a seam that is
+            # already exact only softens frames that were correct.
+            c.label(text="Set Loop Fade to 0 for an exact loop", icon="INFO")
 
 class AUDIOGEO_PT_physics(_Base, Panel):
     bl_label = "Physics"
@@ -416,13 +467,125 @@ class AUDIOGEO_PT_batch(_Base, Panel):
                      icon="INFO")
 
 
+class AUDIOGEO_PT_engine(_Base, Panel):
+    bl_label = "Engine"
+    bl_parent_id = "AUDIOGEO_PT_main"
+    bl_options = {"DEFAULT_CLOSED"}
+
+    def draw(self, context):
+        layout = self.layout
+        props = context.scene.audiogeo
+        layout.use_property_split = True
+
+        col = layout.column(align=True)
+        col.prop(props, "reactive_mode")
+        if props.reactive_mode == "TEXTURE":
+            sub = col.column(align=True)
+            sub.prop(props, "texture_strength")
+            sub.prop(props, "texture_displace")
+            if not props.create_material:
+                sub.label(text="Needs Create Material", icon="ERROR")
+            else:
+                sub.label(text="Any bin count; no keyframe bloat", icon="INFO")
+
+        layout.separator()
+        col = layout.column(align=True)
+        enabled = (props.geometry_type in RIPPLE_MODES
+                   and props.ripple_source == "SPECTRUM")
+        sub = col.column(align=True)
+        sub.enabled = enabled
+        sub.prop(props, "wave_backend")
+        if not enabled:
+            col.label(text="Geometry Nodes needs Water Ripple + Spectrum",
+                      icon="INFO")
+        elif props.wave_backend == "NODES":
+            # Both read SIN/COS shape keys by name, which this path does not
+            # create.
+            col.label(text="No web export or glTF morphs", icon="ERROR")
+
+
+class AUDIOGEO_PT_modulation(_Base, Panel):
+    bl_label = "Modulation"
+    bl_parent_id = "AUDIOGEO_PT_main"
+    bl_options = {"DEFAULT_CLOSED"}
+
+    def draw(self, context):
+        layout = self.layout
+        props = context.scene.audiogeo
+        layout.prop(props, "use_mod_matrix")
+
+        col = layout.column()
+        col.enabled = props.use_mod_matrix
+        row = col.row()
+        row.template_list("AUDIOGEO_UL_routes", "", props, "mod_routes",
+                          props, "mod_index", rows=4)
+        side = row.column(align=True)
+        side.operator("audiogeo.route_add", text="", icon="ADD")
+        side.operator("audiogeo.route_remove", text="", icon="REMOVE")
+
+        if props.mod_routes and 0 <= props.mod_index < len(props.mod_routes):
+            route = props.mod_routes[props.mod_index]
+            box = col.box()
+            box.use_property_split = True
+            c = box.column(align=True)
+            c.prop(route, "source")
+            c.prop(route, "target")
+            c.prop(route, "gain")
+            c.prop(route, "offset")
+            c.prop(route, "curve")
+            c.prop(route, "attack_ms")
+            c.prop(route, "release_ms")
+            c.prop(route, "invert")
+
+        col.operator("audiogeo.route_defaults", icon="PRESET")
+
+
+class AUDIOGEO_PT_arrangement(_Base, Panel):
+    bl_label = "Arrangement"
+    bl_parent_id = "AUDIOGEO_PT_main"
+    bl_options = {"DEFAULT_CLOSED"}
+
+    def draw(self, context):
+        layout = self.layout
+        props = context.scene.audiogeo
+        layout.use_property_split = True
+
+        col = layout.column(align=True)
+        col.prop(props, "mark_sections")
+        col.prop(props, "section_variation")
+
+        layout.separator()
+        col = layout.column(align=True)
+        col.prop(props, "use_section_presets")
+        sub = col.column(align=True)
+        sub.enabled = props.use_section_presets
+        sub.prop(props, "section_blend")
+        sub.operator("audiogeo.auto_sections", icon="PRESET")
+
+        if props.use_section_presets:
+            if len(props.section_slots):
+                box = layout.box()
+                box.label(text="Look per section", icon="SEQUENCE")
+                c = box.column(align=True)
+                for i, slot in enumerate(props.section_slots):
+                    c.prop(slot, "preset", text=slot.label or "Section %d" % (i + 1))
+            else:
+                col.label(text="Generate once, then Auto-Assign", icon="INFO")
+            # Honest about the limit rather than letting it look broken.
+            col.label(text="Only wave heights vary; shape is fixed",
+                      icon="INFO")
+
+
 classes = (
     AUDIOGEO_PT_main,
     AUDIOGEO_PT_frequency,
     AUDIOGEO_PT_geometry,
     AUDIOGEO_PT_physics,
     AUDIOGEO_PT_timing,
+    AUDIOGEO_PT_engine,
     AUDIOGEO_PT_motion,
+    AUDIOGEO_PT_modulation,
+    AUDIOGEO_PT_arrangement,
     AUDIOGEO_PT_lighting,
     AUDIOGEO_PT_extra,
     AUDIOGEO_PT_export,

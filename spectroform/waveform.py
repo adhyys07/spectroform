@@ -431,12 +431,6 @@ def erode_spectrogram(geo, res_rows, res_cols, iterations, talus):
     return geo
 
 def _reduce_rows_mean(mat, target):
-    """Block mean rather than block max.
-
-    _reduce_rows maxes, which is right for a spectrogram (peaks must survive)
-    and wrong for a pitch axis -- it would pick the highest note in each block
-    and bend the whole melody upward.
-    """
     n = mat.shape[0]
     if target >= n:
         return mat.astype(np.float32)
@@ -488,28 +482,127 @@ def melody_colours(geo, saturation=0.9):
     return rgba
 
 
-# Kick gets the longest wavelength and hats the finest chop. Fixed rather than
-# exposed, because it is the one assignment that reads correctly.
 STEM_CYCLE_MULT = {"KICK": 0.6, "BASS": 1.0, "VOCAL": 2.2, "OTHER": 4.0}
 STEM_AMP_SHARE = {"KICK": 1.0, "BASS": 0.7, "VOCAL": 0.5, "OTHER": 0.35}
 
 def stem_cycles(props, stem_names):
-    """Spatial frequency per stem.
-
-    The single definition the geometry and the baker must agree on: the shape
-    keys are built at these wavelengths, so dispersion speed and the resonator
-    frequency have to be derived from the same numbers or the waves travel at
-    the wrong speed for their own size.
-    """
     return np.array(
         [max(props.ripple_cycles * STEM_CYCLE_MULT.get(n, 2.0), 0.01)
          for n in stem_names], dtype=np.float32)
 
 def make_stem_ripple_offsets(geo, props, stem_names):
-    """One travelling wave per stem, sized by what that stem sounds like."""
     unit = max(props.size, 1e-4)
     cycles = stem_cycles(props, stem_names)
     return [wave_pair(geo, props, 2.0 * np.pi * float(cycles[i]),
                       unit * float(props.terrain_strength)
                       * STEM_AMP_SHARE.get(name, 0.5))
             for i, name in enumerate(stem_names)]
+
+def _frames_along_path(points, up=(0.0, 0.0, 1.0)):
+    p = np.asarray(points, dtype=np.float64)
+    tangent = np.gradient(p, axis=0)
+    tangent = tangent / np.maximum(np.linalg.norm(tangent, axis=1, keepdims=True), 1e-9)
+    ref = np.array(up, dtype=np.float64)
+    normals, binormals = np.zeros_like(p), np.zeros_like(p)
+    for i in range(p.shape[0]):
+        t = tangent[i]
+        nrm = ref - t * float(ref @ t)
+        length = np.linalg.norm(nrm)
+        if length < 1e-6:
+            nrm = np.array([1.0, 0.0, 0.0]) - t * float(t[0])
+            length = max(np.linalg.norm(nrm), 1e-9)
+        nrm = nrm / length
+        normals[i], binormals[i] = nrm, np.cross(t, nrm)
+        ref = nrm
+    return tangent, normals, binormals
+
+def build_vectorscope(left, right, size, steps, tube=0.02, segments=8,
+                      rotate=True, spiral=0.0):
+    left = np.asarray(left, dtype=np.float32)
+    right = np.asarray(right, dtype=np.float32)
+    n = min(left.size, right.size)
+    steps = max(16, int(steps))
+
+    # Integer edges: linspace is float, and a float cannot index a slice.
+    edges = np.linspace(0, n, steps + 1).astype(np.int64)
+    lx, ry = np.zeros(steps), np.zeros(steps)
+    for i in range(steps):
+        a, b = int(edges[i]), int(max(edges[i] + 1, edges[i + 1]))
+        sl, sr = left[a:b], right[a:b]
+        # Signed peak: the sample furthest from zero with its sign intact. The
+        # sign is the phase information, which is the whole point of the figure.
+        lx[i] = sl[np.argmax(np.abs(sl))] if sl.size else 0.0
+        ry[i] = sr[np.argmax(np.abs(sr))] if sr.size else 0.0
+
+    if rotate:
+        root = 1.0 / np.sqrt(2.0)
+        x, y = (lx - ry) * root, (lx + ry) * root  # x is width, zero for mono
+    else:
+        x, y = lx, ry
+
+    half = size * 0.5
+    path = np.stack([x * half, y * half,
+                     np.linspace(0.0, size * float(spiral), steps)], axis=1)
+
+    seg = max(3, int(segments))
+    radius = max(size * float(tube), 1e-5)
+    ring = np.linspace(0.0, 2.0 * np.pi, seg, endpoint=False)
+    cos_r, sin_r = np.cos(ring), np.sin(ring)
+
+    _t, nrm, bin_ = _frames_along_path(path)
+    verts = np.empty((steps * seg, 3), dtype=np.float32)
+    normals = np.empty_like(verts)
+    for i in range(steps):
+        offs = (nrm[i][None, :] * cos_r[:, None]
+                + bin_[i][None, :] * sin_r[:, None])
+        verts[i * seg:(i + 1) * seg] = path[i][None, :] + offs * radius
+        normals[i * seg:(i + 1) * seg] = offs
+
+    return {
+        "verts": verts,
+        "normals": normals.astype(np.float32),
+        "faces": _quad_grid_faces(steps, seg, wrap_cols=True),
+        "falloff": np.ones(verts.shape[0], dtype=np.float32),
+        "wave": np.repeat(np.linspace(0.0, 1.0, steps).astype(np.float32), seg),
+    }
+
+def correlation_curve(left, right, fps, rate, window_ms=50.0):
+    """Per-frame phase correlation, -1..1.
+
+    The number under the figure: +1 is mono, 0 is wide, negative means the
+    channels fight and the mix will partly cancel on a mono system. A
+    genuinely informative hue source in its own right.
+    """
+    hop = max(1, int(round(rate / float(fps))))
+    win = max(hop, int(rate * window_ms / 1000.0))
+    n_frames = max(2, int(np.ceil(min(left.size, right.size) / float(hop))))
+
+    out = np.zeros(n_frames, dtype=np.float32)
+    for i in range(n_frames):
+        a = i * hop
+        l = np.asarray(left[a:a + win], dtype=np.float64)
+        r = np.asarray(right[a:a + win], dtype=np.float64)
+        m = min(l.size, r.size)
+        if m < 8:
+            continue
+        l, r = l[:m] - l[:m].mean(), r[:m] - r[:m].mean()
+        denom = np.linalg.norm(l) * np.linalg.norm(r)
+        out[i] = float(l @ r / denom) if denom > 1e-9 else 0.0
+    return out
+
+def correlation_curve(left, right, fps, rate, window_ms=50.0):
+    hop = max(1, int(round(rate / float(fps))))
+    win = max(hop, int(rate * window_ms / 1000.0))
+    n_frames = max(2, int(np.ceil(min(left.size, right.size) / float(hop))))
+
+    out = np.zeros(n_frames, dtype=np.float32)
+    for i in range(n_frames):
+        a = i * hop
+        l, r = left[a:a + win].astype(np.float64), right[a:a + win].astype(np.float64)
+        m = min(l.size, r.size)
+        if m < 8:
+            continue
+        l, r = l[:m] - l[:m].mean(), r[:m] - r[:m].mean()
+        denom = np.linalg.norm(l) * np.linalg.norm(r)
+        out[i] = float(l @ r / denom) if denom > 1e-9 else 0.0
+    return out

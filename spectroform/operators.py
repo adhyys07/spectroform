@@ -148,51 +148,94 @@ class AUDIOGEO_OT_generate(Operator):
                     data["section_gain"] = baking.section_gain(
                         n_frames, data["sections"], props.section_variation,
                         seed=props.seed)
+                if props.use_section_presets:
+                    from . import sections as sections_mod
+                    # A preset per section, crossfaded. Only the bakeable
+                    # parameters can vary: the mesh and its shape keys are
+                    # built once, so shape and resolution are fixed for the
+                    # whole bake.
+                    bounds = sections_mod.section_bounds(
+                        data.get("sections", ()), n_frames, props.frame_start)
+                    weights = sections_mod.preset_weights(
+                        bounds, n_frames, props.section_blend)
+                    data["section_curve"] = sections_mod.amplitude_curve(
+                        props, props.section_slots, weights)
+                    data["section_count"] = max(1, len(bounds) - 1)
             else:
                 bin_hz = None
 
-            if kind == "SPECTROGRAM":
-                geo = waveform.build_spectrogram(
-                    spec, props.size, props.spec_height, props.time_steps)
-            elif kind == "WAVE_TUBE":
-                geo = waveform.build_waveform_tube(
-                    samples, props.size, props.tube_radius,
-                    props.tube_segments, props.time_steps)
-            elif kind == "WAVE_RING":
-                geo = waveform.build_waveform_ring(
-                    samples, props.size, props.tube_radius,
-                    props.tube_segments, props.time_steps)
-            elif kind == "RIPPLE":
-                geo = waveform.build_ripple(
-                    props.resolution, props.size, props.ripple_pattern,
-                    arms=props.ripple_arms, warp=props.ripple_turbulence,
-                    seed=props.seed)
-            elif kind == "MELODY":
-                hz, conf = analysis.pitch_contour(
-                samples, rate, props.bake_fps,
-                fmin=props.pitch_min, fmax=props.pitch_max)
-                hz = analysis.fill_unvoiced(hz, conf, props.pitch_gap)
-                unit = analysis.pitch_to_unit(
-                    hz, props.pitch_min, props.pitch_max)
-                data["pitch_hz"], data["pitch_conf"] = hz, conf
-                data["pitch_unit"] = unit
-                geo = waveform.build_melody_ribbon(
-                    unit, conf, props.size, props.time_steps,
-                    height=props.spec_height)
-            
-            elif kind in SPECTRAL_BARS:
-                geo = waveform.build_spectrum_bars(
-                    props.spectrum_bins, props.size, radial=(kind == "BARS_RADIAL"))
+            if props.mesh_source == "CUSTOM":
+                from . import meshinput
+
+                base = props.custom_mesh
+                if base is None:
+                    raise RuntimeError(
+                        "Pick a base mesh, or switch back to a built-in shape.")
+                geo = meshinput.geo_from_object(
+                    base, apply_modifiers=props.custom_apply_mods)
+                if props.custom_auto_size:
+                    # The waves are sized in Size units, so a logo that is 0.2 m
+                    # across needs Size to follow the object, not the default.
+                    props.size = meshinput.suggested_size(geo)
+                if kind in RIPPLE_MODES:
+                    geo = meshinput.add_ripple_fields(
+                        geo, props.size, props.ripple_pattern,
+                        arms=props.ripple_arms, warp=props.ripple_turbulence,
+                        seed=props.seed)
+                obj = meshinput.create_from_source(
+                    context, base, geo, props.shade_smooth)
             else:
-                geo = geometry.build_geometry(props)
+                if kind == "SPECTROGRAM":
+                    geo = waveform.build_spectrogram(
+                        spec, props.size, props.spec_height, props.time_steps)
+                elif kind == "WAVE_TUBE":
+                    geo = waveform.build_waveform_tube(
+                        samples, props.size, props.tube_radius,
+                        props.tube_segments, props.time_steps)
+                elif kind == "WAVE_RING":
+                    geo = waveform.build_waveform_ring(
+                        samples, props.size, props.tube_radius,
+                        props.tube_segments, props.time_steps)
+                elif kind == "RIPPLE":
+                    geo = waveform.build_ripple(
+                        props.resolution, props.size, props.ripple_pattern,
+                        arms=props.ripple_arms, warp=props.ripple_turbulence,
+                        seed=props.seed)
+                elif kind == "MELODY":
+                    hz, conf = analysis.pitch_contour(
+                    samples, rate, props.bake_fps,
+                    fmin=props.pitch_min, fmax=props.pitch_max)
+                    hz = analysis.fill_unvoiced(hz, conf, props.pitch_gap)
+                    unit = analysis.pitch_to_unit(
+                        hz, props.pitch_min, props.pitch_max)
+                    data["pitch_hz"], data["pitch_conf"] = hz, conf
+                    data["pitch_unit"] = unit
+                    geo = waveform.build_melody_ribbon(
+                        unit, conf, props.size, props.time_steps,
+                        height=props.spec_height)
+                elif kind == "VECTORSCOPE":
+                    if not props.use_stereo:
+                        self.report({"WARNING"}, "Vectorscope needs Stereo Split enabled.")
+                    geo = waveform.build_vectorscope(
+                        left, right, props.size, props.time_steps,
+                        tube=props.tube_radius * 0.2, segments=props.tube_segments,
+                        rotate=props.scope_rotate, spiral=props.scope_spiral)
+                    data["correlation"] = waveform.correlation_curve(
+                        left, right, props.bake_fps, rate)        
+            
+                elif kind in SPECTRAL_BARS:
+                    geo = waveform.build_spectrum_bars(
+                        props.spectrum_bins, props.size, radial=(kind == "BARS_RADIAL"))
+                else:
+                    geo = geometry.build_geometry(props)
 
-            if kind == "SPECTROGRAM" and props.erosion_iterations > 0:
-                rows = geo["verts"].shape[0] // spec.shape[1]
-                geo = waveform.erode_spectrogram(
-                    geo, rows, spec.shape[1],
-                    props.erosion_iterations, props.erosion_talus)
+                if kind == "SPECTROGRAM" and props.erosion_iterations > 0:
+                    rows = geo["verts"].shape[0] // spec.shape[1]
+                    geo = waveform.erode_spectrogram(
+                        geo, rows, spec.shape[1],
+                        props.erosion_iterations, props.erosion_talus)
 
-            obj = scene_build.create_object(context, geo, props.shade_smooth)
+                obj = scene_build.create_object(context, geo, props.shade_smooth)
             stamp.write(obj, props)
 
             wm.progress_update(65)
@@ -220,6 +263,21 @@ class AUDIOGEO_OT_generate(Operator):
                     else:
                         baked = baking.bake_emitters(
                             obj, data, props, frames, data["beats"])
+                elif props.ripple_source == "SPECTRUM" and props.wave_backend == "NODES":
+                    from . import geonodes
+                    # One mesh plus a node tree instead of 2n stored meshes.
+                    # No morph targets, so the web export and glTF morph
+                    # animation do not apply to this path.
+                    cycles = waveform.ripple_component_cycles(
+                        spec.shape[1], props.ripple_cycles, props.ripple_spread)
+                    geonodes.write_phase_attribute(obj, geo)
+                    tree = geonodes.build_wave_tree(spec.shape[1], cycles)
+                    wm.progress_update(80)
+                    geonodes.bake_tree_inputs(
+                        obj, tree, spec, cycles, props, frames,
+                        float(props.bake_fps))
+                    baked = baking.bake_object_motion(obj, data, props, frames)
+                    data["backend"] = "nodes"
                 elif props.ripple_source == "SPECTRUM":
                     pairs = waveform.make_spectral_ripple_offsets(
                         geo, props, spec.shape[1], stereo=props.use_stereo)
@@ -320,7 +378,35 @@ class AUDIOGEO_OT_generate(Operator):
             scene.frame_end = int(props.frame_start + n_frames - 1)
             scene.frame_set(scene.frame_start)
 
-            if props.create_material:
+            if props.create_material and props.reactive_mode == "TEXTURE":
+                from . import texture
+                if spec is None:
+                    spec, _hit = cache.memo(
+                        audio_key, "spec:mono",
+                        lambda: analysis.spectrogram(
+                            samples, rate, props.bake_fps,
+                            bins=props.spectrum_bins,
+                            dynamic_range=props.dynamic_range),
+                        fps=props.bake_fps, bins=int(props.spectrum_bins),
+                        dynamic_range=props.dynamic_range)
+                    bin_hz = analysis.bin_frequencies(spec.shape[1])
+                img = texture.write_spectrum_image(spec)
+                # Zero energy on purpose: setup_material() bakes an Emission
+                # Strength fcurve, and a keyframe beats a node-tree driver on
+                # the same socket.
+                scene_build.setup_material(
+                    obj, frames, np.zeros(n_frames, dtype=np.float32))
+                mat = bpy.data.materials.get(MAT_NAME)
+                if mat is not None:
+                    texture.wire_spectrum_into_material(
+                        mat, img, props.frame_start, n_frames,
+                        strength=props.texture_strength)
+                    if props.texture_displace:
+                        texture.displace_with_texture(
+                            obj, img, props.frame_start, n_frames,
+                            height=props.spec_height * props.size)
+                data["texture"] = "%dx%d" % (spec.shape[1], spec.shape[0])
+            elif props.create_material:
                 if "energy" in baked:
                     energy = baked["energy"]
                 else:
@@ -342,6 +428,22 @@ class AUDIOGEO_OT_generate(Operator):
                 elif mat is not None and props.colour_source == "TIMBRE"                         and spec is not None:
                     centroid = analysis.spectral_centroid(spec, bin_hz)
                     scene_build.bake_emission_hue(mat, frames, centroid)
+
+            if props.use_mod_matrix and len(props.mod_routes):
+                from . import modmatrix
+                # Runs after the material exists, so the hue and emission
+                # targets have something to write to.
+                mod_sources = modmatrix.build_sources(
+                    data, spec, bin_hz, props, n_frames, float(props.bake_fps))
+                route_count, route_totals = modmatrix.apply_routes(
+                    context, obj, props, frames, mod_sources,
+                    float(props.bake_fps))
+                data["routes"] = route_count
+                # WAVE_AMP and WAVE_SPEED are consumed by the ripple bakers
+                # rather than written to a datablock, so they are handed back
+                # for a future bake to read.
+                data["route_wave_amp"] = route_totals.get("WAVE_AMP")
+                data["route_wave_speed"] = route_totals.get("WAVE_SPEED")
 
             if props.vertex_colour:
                 rgba = waveform.frequency_colours(geo, props, spec)
@@ -441,13 +543,27 @@ class AUDIOGEO_OT_generate(Operator):
                 msg += " (tempo %.0f-%.0f)" % (lo, hi)
         if data.get("stems"):
             msg += ", stems: %s" % "/".join(s.lower() for s in data["stems"])
+        if data.get("backend") == "nodes":
+            msg += ", geometry nodes"
+        if data.get("texture"):
+            msg += ", spectrum texture %s" % data["texture"]
+        if data.get("routes"):
+            msg += ", %d routes" % data["routes"]
+        if data.get("section_count"):
+            msg += ", %d section looks" % data["section_count"]
         if cached:
             # "Did it actually skip the analysis" is the first question when a
             # tweak comes back suspiciously fast.
             msg += " [cached]"
         props.last_report = msg
         self.report({"INFO"}, msg)
+
+        from . import dataexport
+        dataexport.LAST_RUN.update(data=data, spec=spec, bin_hz=bin_hz,
+                                   chroma=locals().get("chroma"),
+                                   stems=locals().get("stems"))
         return {"FINISHED"}
+
 
 class AUDIOGEO_OT_rebake(Operator):
     bl_idname = "audiogeo.rebake"

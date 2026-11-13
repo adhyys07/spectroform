@@ -238,6 +238,12 @@ def bake_spectral_ripple(obj, spec, data, props, frames, cycles=None):
             fps, props.bar_accent_gain, props.phrase_accent_gain,
             start_frame=props.frame_start)
 
+    # Preset-per-section takes priority over the random section variation:
+    # if the user assigned looks, that is the intended arrangement.
+    section = data.get("section_curve")
+    if section is None:
+        section = data.get("section_gain")
+
     for i in range(n_comp):
         col = spec[:, i]
         if props.per_band_level:
@@ -256,6 +262,8 @@ def bake_spectral_ripple(obj, spec, data, props, frames, cycles=None):
             # Hierarchy, not extra level: the accent scales whatever the band
             # is already doing, so a bar line in a quiet passage stays quiet.
             amp = amp * (1.0 + accent[:amp.size])
+        if section is not None and len(section) >= amp.size:
+            amp = amp * np.asarray(section[:amp.size], dtype=np.float32)
         ph = ripple_phase(data, props, frames, float(speeds[i]), onset, fps)
         amp, ph = loop_pair(amp, ph, props)
         bake_curve(key, 'key_blocks["%s"].value' % (SK_RIPPLE_SIN % i), -1, frames,

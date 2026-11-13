@@ -1,11 +1,18 @@
+import bpy
 from bpy.props import (
     BoolProperty,
+    CollectionProperty,
     EnumProperty,
     FloatProperty,
     IntProperty,
+    PointerProperty,
     StringProperty,
 )
 from bpy.types import PropertyGroup
+
+# The PropertyGroups these CollectionProperties point at. Both modules must
+# register before this one, or the pointer types do not exist yet.
+from . import modmatrix, sections
 
 # sine_field() offsets the spike seed by 977, so keep headroom below 2**31.
 _SEED_MAX = 2 ** 31 - 1000
@@ -108,7 +115,12 @@ class AUDIOGEO_Props(PropertyGroup):
             ("WAVE_RING", "Waveform Ring", "The waveform tube bent into a closed ring"),
             ("BARS_RADIAL", "Spectrum Bars (Radial)", "Animated bar per frequency bin, in a circle"),
             ("BARS_LINE", "Spectrum Bars (Line)", "Animated bar per frequency bin, in a row"),
-            ("MELODY", "Melody Ribbon", ...),
+            ("MELODY", "Melody Ribbon", "A ribbon whose height follows the "
+                                        "lead pitch, with the whole tune "
+                                        "visible at once"),
+            ("VECTORSCOPE", "Stereo Vectorscope", "The goniometer figure: "
+                                                  "left against right. Mono "
+                                                  "collapses to a line"),
             ("GRID", "Grid (Noise)", "Flat plane displaced by a noise field"),
             ("SPHERE", "Sphere (Noise)", "UV sphere displaced by a noise field"),
             ("CYLINDER", "Cylinder (Noise)", "Open tube displaced by a noise field"),
@@ -603,7 +615,138 @@ class AUDIOGEO_Props(PropertyGroup):
     pitch_gap: IntProperty(name="Bridge Gaps", default=8, min=0, max=120,
         description="Unvoiced frames bridged between notes. Longer silences "
                     "stay as breaks in the ribbon")
+    scope_rotate: BoolProperty(name="Goniometer Angle", default=True,
+        description="Turn the figure 45 degrees, as hardware does, so mono is "
+                    "a vertical line and width reads across")
+    scope_spiral: FloatProperty(name="Time Lift", default=0.3, min=0.0, max=4.0,
+        description="Raise the trace in Z as the track plays, so a long song "
+                    "does not scribble over itself")
+    loop_bars: IntProperty(name="Loop Length", default=8, min=1, max=64,
+        description="Bars in the exported clip. 4 and 8 are the standard "
+                    "lengths for a VJ clip library")
+    loop_pick: EnumProperty(name="Loop From",
+        items=[("LOUDEST", "Busiest Part", "The highest-energy run of bars"),
+               ("START", "From The Start", "The first full bars")],
+        default="LOUDEST")
+    mesh_source: EnumProperty(
+        name="Base Mesh",
+        items=[("BUILTIN", "Built-in Shape", "Generate one of the shapes above"),
+               ("CUSTOM", "My Own Object", "Deform an existing mesh -- a logo, "
+                                           "a character, a scan. The original "
+                                           "is left untouched")],
+        default="BUILTIN",
+    )
+    custom_mesh: PointerProperty(
+        name="Object", type=bpy.types.Object,
+        description="Mesh to deform. A copy is made, so this object is not "
+                    "modified",
+        poll=lambda self, obj: obj.type == "MESH",
+    )
+    custom_apply_mods: BoolProperty(
+        name="Apply Modifiers", default=True,
+        description="Use the evaluated mesh, so subdivision and mirrors are "
+                    "included. Turn off to deform the base cage")
+    custom_auto_size: BoolProperty(
+        name="Match Object Scale", default=True,
+        description="Set Size from the object's own extent, so the waves suit "
+                    "the shape instead of swamping it")
+    use_mod_matrix: BoolProperty(
+        name="Use Modulation Matrix", default=False,
+        description="Route any analysis signal to any channel, instead of the "
+                    "fixed bass/mid/treble mapping")
+    mod_routes: CollectionProperty(type=modmatrix.AUDIOGEO_ModRoute)
+    mod_index: IntProperty(default=0)
 
+    # --- arrangement (E19) ----------------------------------------------
+    use_section_presets: BoolProperty(
+        name="Preset Per Section", default=False,
+        description="Give each detected section its own look, crossfaded at "
+                    "the boundaries. Shape and resolution stay fixed for the "
+                    "whole bake")
+    section_slots: CollectionProperty(type=sections.AUDIOGEO_SectionSlot)
+    section_blend: IntProperty(
+        name="Crossfade", default=24, min=0, max=240,
+        description="Frames over which one section's look becomes the next")
+
+    # --- reactivity backend (D12 / D13) ---------------------------------
+    reactive_mode: EnumProperty(
+        name="Reactivity",
+        description="How the audio reaches the material",
+        items=[
+            ("KEYFRAME", "Baked Keyframes", "A keyframe per frame. Exact, and "
+                                            "heavy on long tracks"),
+            ("TEXTURE", "Spectrum Texture", "The whole analysis as one image "
+                                            "read by a driver. Any number of "
+                                            "bins, tiny file"),
+        ],
+        default="KEYFRAME",
+    )
+    texture_strength: FloatProperty(
+        name="Emission Gain",
+        description="Multiplier on the sampled spectrum before it reaches "
+                    "emission strength",
+        default=6.0, min=0.0, max=50.0, soft_max=20.0,
+    )
+    texture_displace: BoolProperty(
+        name="Also Displace",
+        description="Add a Displace modifier fed by the same image, so the "
+                    "texture moves geometry as well as lighting it",
+        default=False,
+    )
+    wave_backend: EnumProperty(
+        name="Wave Engine",
+        description="How the waves are stored",
+        items=[
+            ("KEYS", "Shape Keys", "Two stored meshes per wave. Exports to "
+                                   "glTF and FBX, and the web page reads them"),
+            ("NODES", "Geometry Nodes", "One mesh plus a node tree. Far "
+                                        "smaller files; no morph-target "
+                                        "export"),
+        ],
+        default="KEYS",
+    )
+
+    # --- analysis export (D15) ------------------------------------------
+    data_export_path: StringProperty(
+        name="Analysis Path",
+        description="Where the curves and events are written. The extension "
+                    "is set from Format",
+        subtype="FILE_PATH", default="//spectroform_analysis.json",
+    )
+    data_export_format: EnumProperty(
+        name="Data Format",
+        items=[
+            ("JSON", "JSON", "Nested, with events in both frames and seconds"),
+            ("CSV", "CSV", "One row per frame -- spreadsheets and pandas"),
+            ("BOTH", "Both", "Write both files"),
+        ],
+        default="JSON",
+    )
+    data_include_spectrogram: BoolProperty(
+        name="Include Spectrogram",
+        description="Add the full time x frequency grid. Accurate and large "
+                    "-- a few megabytes for a full track",
+        default=False,
+    )
+    data_include_chroma: BoolProperty(
+        name="Include Chroma",
+        description="Add the 12 pitch-class weights per frame",
+        default=False,
+    )
+    data_minify: BoolProperty(
+        name="Minify",
+        description="Strip whitespace from the JSON. Turn off to read it",
+        default=True,
+    )
+    live_device: EnumProperty(
+        name="Input Device", items=lambda s, c: liveinput.device_list() or
+        [("", "No input devices", "")],
+        description="Microphone, or a loopback device to capture what is playing")
+    live_rate: IntProperty(name="Sample Rate", default=44100, min=8000, max=192000)
+    live_smoothing: FloatProperty(
+        name="Smoothing", default=0.6, min=0.0, max=0.99,
+        description="How much of the previous value carries over. Low is "
+                    "twitchy, high is laggy")
 
 
 

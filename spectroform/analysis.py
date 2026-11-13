@@ -674,3 +674,15 @@ def stem_reconstruct(spec, W, H, columns):
     full = np.maximum(H @ W, 1e-9)
     part = H[:, columns] @ W[columns]
     return (np.asarray(spec, dtype=np.float32) * (part / full)).astype(np.float32)
+
+def make_stem_ripple_offsets(geo, props, stem_names):
+    unit = max(props.size, 1e-4)
+    shape = {"KICK": (0.6, 1.0), "BASS": (1.0, 0.7),
+             "VOCAL": (2.2, 0.5), "OTHER": (4.0, 0.35)}
+    out = []
+    for name in stem_names:
+        mult, share = shape.get(name, (2.0, 0.5))
+        k = 2.0 * np.pi * max(props.ripple_cycles * mult, 0.01)
+        out.append(wave_pair(geo, props, k,
+                             unit * float(props.terrain_strength) * share))
+    return out

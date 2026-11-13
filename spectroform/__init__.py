@@ -26,12 +26,18 @@ if "bpy" in locals():
         lyrics,
         webexport,
         texture,
+        geonodes,
         stamp,
+        meshinput,
+        modmatrix,
+        sections,
         properties,
         presets,
         render,
         preview,
         batch,
+        dataexport,
+        looping,
         operators,
         ui,
     ):
@@ -44,9 +50,14 @@ else:
         batch,
         cache,
         constants,
+        dataexport,
         geometry,
+        geonodes,
+        looping,
         lyrics,
+        meshinput,
         midi_io,
+        modmatrix,
         operators,
         physics,
         presets,
@@ -54,6 +65,7 @@ else:
         properties,
         render,
         scene_build,
+        sections,
         stamp,
         texture,
         ui,
@@ -66,8 +78,12 @@ from bpy.props import PointerProperty
 
 from .constants import MIN_BLENDER
 
-CLASSES = (properties.classes + operators.classes + preview.classes
-           + presets.classes + render.classes + batch.classes + ui.classes)
+# modmatrix and sections hold the PropertyGroups that AUDIOGEO_Props points at
+# with CollectionProperty, so they must be registered before it.
+CLASSES = (modmatrix.classes + sections.classes
+           + properties.classes + operators.classes + preview.classes
+           + presets.classes + render.classes + batch.classes
+           + dataexport.classes + looping.classes + ui.classes)
 
 
 def register():
